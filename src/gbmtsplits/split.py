@@ -80,6 +80,7 @@ class GloballyBalancedSplit(ABC):
         
         # Get the list of targets
         if targets is None:
+            if ignore_columns is None: ignore_columns = []
             targets = [c for c in data.columns if c != smiles_column and c not in ignore_columns]
 
 
