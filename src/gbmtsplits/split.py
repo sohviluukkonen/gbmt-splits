@@ -1,5 +1,4 @@
 import tqdm
-import argparse
 
 import numpy as np
 import pandas as pd
@@ -11,7 +10,6 @@ from rdkit.Chem import rdMolDescriptors
 from rdkit.SimDivFilters import rdSimDivPickers
 
 from typing import List, Dict
-from timeit import default_timer as timer
 
 from pulp import *
 
@@ -481,7 +479,8 @@ class DissimilarityDrivenGloballyBalancedSplit(GloballyBalancedSplit):
         print('Molecules were clustered based on dissimilarity into {} clusters.'.format(len(clusters)))
 
         return clusters
-    
+
+
 def CommandLineInterface():
 
     # Parse command line arguments ###############################
@@ -561,5 +560,3 @@ def CommandLineInterface():
 if __name__ == '__main__':
 
     CommandLineInterface()
-
-
