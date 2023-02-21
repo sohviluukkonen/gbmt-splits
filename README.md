@@ -7,11 +7,22 @@ This package is based on the work of Giovanni Tricarico presented in [Constructi
 # Installation
 
 ```
-pip install git+ssh:git@github.com:sohviluukkonen/gbmt-splits.git 
+pip install git+ssh:git@github.com:sohviluukkonen/gbmt-splits.git
 ```
 
 # Getting started
+
+## CLI
+The split can be easily created from the command line with
+
+```
+gbmtsplits -i <dataset.csv> -c <random/dissimilarity> 
+```
+with <datasets.csv> an pivote dataset where each row corresponds to a unique molecules and each task has it's own column. For more options use `-h/--help`.
+
 ## API
+
+The splits can be also created (more options for linear programming to merge initial clusters) and visualised with an API. 
 
 Load or create pivoted dataset (each row corresponds to a unique molecules and each task has it's own column)
 ```
@@ -36,7 +47,7 @@ as `min_distance=True`, the minimum Tanimoto distance between a molecule in a su
 
 The chemical (dis)similarity of the subsets and the balance of subsets per task can visualized either for a single dataset/split:
 ```
-from gbmt.plot import PlottingSingleDataset
+from gbmtsplits.plot import PlottingSingleDataset
 plotter = PlottingSingleDataset(data_rgbs)
 plotter.plot_all()
 ```
@@ -50,7 +61,7 @@ plotter.plot_all()
 
 or to compare multiple datasets/splits:
 ```
-from gbmt.plot import PlottingCompareDatasets
+from gbmtsplits.plot import PlottingCompareDatasets
 
 data_rgbs['Dataset'] = 'RGBS'
 data_dgbs['Dataset'] = 'DGBS'
