@@ -145,9 +145,9 @@ class PlottingSingleDataset():
 
         return fig, ax
     
-    def plot_target_balance(self, figsize : tuple = None, ideal_sizes : List[float] = None, fname : str = None, **kwargs):
+    def plot_target_balance_bars(self, figsize : tuple = None, ideal_sizes : List[float] = None, fname : str = None, **kwargs):
         """
-        Plots the fraction of compounds per subset for each target.
+        Plots the fraction of compounds per subset for each target as stacked bars.
         
         Parameters
         ----------
@@ -186,8 +186,65 @@ class PlottingSingleDataset():
             fig.savefig(fname, dpi=300, bbox_inches='tight')
         
         return fig, ax
+    
+    def plot_target_balance_distributions(self, ideal_sizes : List[float], figsize : tuple = None, plot_function : callable = sns.boxplot, fname : str = None, **kwargs):
+        """
+        Plots the distribution of the fraction of compounds per subset for each target.
+        
+        Parameters
+        ----------
+        ideal_sizes : List[float]
+            List of ideal fractions for each subset
+        figsize : tuple, optional
+            Size of the figure, by default None
+        plot_function : callable, optional
+            Function to use for plotting, by default sns.boxplot
+        fname : str, optional
+            Name of the file to save the figure, by default None
+        
+        Returns
+        -------
+        fig, ax
+            Figure and axis objects.
+        """
 
-    def plot_min_tanimoto_distance(self, figsize : tuple = None, plot_function : callable = sns.boxplot, fname : str = None, **kwargs):
+        subsets = sorted(self.data[self.subset_col].unique())
+        if len(ideal_sizes) != len(subsets):
+            raise ValueError('The number of ideal sizes must be equal to the number of subsets.')
+        
+        df_balance = compute_target_balance(self.data, self.targets, subset_col=self.subset_col)
+        
+        df_balance_diff = pd.DataFrame(columns=['Subset', 'Task', 'dFraction'])
+        for task in df_balance['Task'].unique():
+            for subset, size in zip(subsets, ideal_sizes):
+                df_balance_diff = pd.concat([df_balance_diff,
+                                             pd.DataFrame({
+                                                    'Subset': [subset],
+                                                    'Task': [task],
+                                                    'dFraction': [df_balance[df_balance['Task'] == task][subset].values[0] - size]
+                                                    })
+                                                ],
+                                                ignore_index=True
+                                            )
+                
+        if figsize is None: figsize = ( len(self.targets)/4, 4)
+
+        fig, ax = plt.subplots(1, figsize=figsize)
+        plot_function(x='Subset', y='dFraction', data=df_balance_diff, ax=ax, palette=self.colors)
+
+        ax.axhline(0, color='k', linestyle='--')
+
+        ax.set_title(f'Target balance {self.title_suffix}')
+        ax.set_ylabel('dFraction (observed - ideal)')
+        ax.set_xlabel('Subset')
+        ax.set_ylim(-0.05, 0.05)
+
+        if fname is not None:
+            fig.savefig(fname, dpi=300, bbox_inches='tight')
+        
+        return fig, ax
+
+    def plot_min_tanimoto_distance_distributions(self, figsize : tuple = None, plot_function : callable = sns.boxplot, fname : str = None, **kwargs):
         """
         Plots the distribution of the minimum Tanimoto distance between compounds in different subsets.
 
@@ -222,12 +279,13 @@ class PlottingSingleDataset():
 
         return fig, ax
 
-    def plot_all(self, **kwargs):
+    def plot_all(self, ideal_subset_sizes : List[float] = None):
         """Plot all plots."""
         self.plot_pca()
         self.plot_tsne()
-        self.plot_target_balance()
-        self.plot_min_tanimoto_distance()
+        self.plot_target_balance_bars(ideal_sizes=ideal_subset_sizes)
+        self.plot_target_balance_distributions(ideal_subset_sizes)
+        self.plot_min_tanimoto_distance_distributions()
 
 class PlottingCompareDatasets():
     """
@@ -351,9 +409,9 @@ class PlottingCompareDatasets():
 
         return fig, ax
     
-    def plot_target_balance(self, figsize : tuple = None, ideal_sizes : List[float] = None, drop_task_names : bool = False, fname : str = None, **kwargs):
+    def plot_target_balance_bars(self, figsize : tuple = None, ideal_sizes : List[float] = None, drop_task_names : bool = False, fname : str = None, **kwargs):
         """
-        Plots the fraction of compound per subset for each target of each dataset in subfigures.
+        Plots the fraction of compound per subset for each target of each dataset in subfigures as stacked bars.
         
         Parameters
         ----------
@@ -400,7 +458,69 @@ class PlottingCompareDatasets():
 
         return fig, ax 
     
-    def plot_min_tanimoto_distance(self, figsize : tuple = None, plot_function : callable = sns.boxplot, fname : str = None, **kwargs):
+    def plot_target_balance_distributions(self, ideal_sizes : List[float], figsize : tuple = None, plot_function : callable = sns.boxplot, fname : str = None, **kwargs):
+
+        """ 
+        Plots the distribution of the fraction of compounds per subset for each target of each dataset.
+        
+        Parameters
+        ----------
+        ideal_sizes : List[float]
+            List of ideal sizes for each subset.
+        figsize : tuple, optional
+            Size of the figure, by default None
+        plot_function : callable, optional
+            Function to use for plotting, by default sns.boxplot
+        fname : str, optional
+            Name of the file to save the figure, by default None
+        
+        Returns
+        -------
+        fig, ax
+            Figure and axis objects.
+        """
+
+        subsets = sorted(self.data[self.subset_col].unique())
+        if len(ideal_sizes) != len(subsets):
+            raise ValueError('The number of ideal sizes must be equal to the number of subsets.')
+
+        if figsize is None: figsize = (self.data[self.subset_col].nunique() * len(self.dataset_names), 4)
+        
+        df_balance_diff = pd.DataFrame(columns=[self.compare_col, 'Task', 'Subset', 'dFraction'])
+        for dataset in self.dataset_names:
+            df_balance = compute_target_balance(self.data[self.data[self.compare_col] == dataset], self.targets, self.subset_col)
+            for task in df_balance['Task'].unique():
+                for subset, size in zip(subsets, ideal_sizes):
+                    df_balance_diff = pd.concat([df_balance_diff,
+                                                pd.DataFrame({
+                                                        self.compare_col: [dataset],
+                                                        'Subset': [subset],
+                                                        'Task': [task],
+                                                        'dFraction': [df_balance[df_balance['Task'] == task][subset].values[0] - size]
+                                                        })
+                                                    ],
+                                                    ignore_index=True
+                                                )
+                    
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+        plot_function(x=self.subset_col, y='dFraction', hue=self.compare_col, hue_order=self.dataset_names, data=df_balance_diff, ax=ax, palette=self.colors, **kwargs)
+
+        ax.axhline(0, color='k', linestyle='--')
+        ax.set_ylabel('dFraction (observed - ideal)')
+        ax.set_xlabel('Subset')
+        ax.set_ylim(-0.05, 0.05)
+
+
+        handles, labels = ax.get_legend_handles_labels()
+        ax.legend([],[], frameon=False)
+        fig.legend(handles, labels, loc='upper center', ncol=len(self.data.Subset.unique()), frameon=False)
+
+        if fname is not None:
+            fig.savefig(fname, dpi=300, bbox_inches='tight')
+
+
+    
+    def plot_min_tanimoto_distance_distributions(self, figsize : tuple = None, plot_function : callable = sns.boxplot, fname : str = None, **kwargs):
         """
         Plots the distribution of the minimum Tanimoto distance between compounds in different subsets.
         
@@ -437,9 +557,10 @@ class PlottingCompareDatasets():
 
         return fig, ax
 
-    def plot_all(self, **kwargs):
+    def plot_all(self, ideal_subset_sizes : List[float] = None):
         """Plot all plots."""
         self.plot_pca()
         self.plot_tsne()
-        self.plot_target_balance()
-        self.plot_min_tanimoto_distance()
+        self.plot_target_balance_bars(ideal_sizes=ideal_subset_sizes)
+        self.plot_target_balance_distributions(ideal_sizes=ideal_subset_sizes)
+        self.plot_min_tanimoto_distance_distributions()
