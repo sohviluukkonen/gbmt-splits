@@ -1,7 +1,7 @@
 import argparse
 import pandas as pd
 from timeit import default_timer as timer
-from .split import RandomGloballyBalancedSplit, DissimilarityDrivenGloballyBalancedSplit
+from .split import RandomGloballyBalancedSplit, DissimilarityDrivenGloballyBalancedSplit, ScaffoldDrivenGloballyBalancedSplit
 
 
 def main():
@@ -20,7 +20,7 @@ def main():
     parser.add_argument('-ic','--ignore_columns', type=str, nargs='+', default=None,
                         help='Name of the columns to ignore')
     parser.add_argument('-c','--clustering', type=str, default='dissimilarity',
-                        help='Clustering algorithm to use. Options: random, dissimilarity')
+                        help='Clustering algorithm to use. Options: random, dissimilarity or scaffold')
     parser.add_argument('-nc','--n_clusters', type=int, default=None,
                         help='Number of clusters to use. Only used for random clustering. If None, the number of clusters is equal to the number of molecules divided by 100')
     parser.add_argument('-rs','--random_seed', type=int, default=42,
@@ -52,22 +52,25 @@ def main():
     elif args.target_columns is None and args.ignore_columns is not None:
         args.target_columns = [col for col in df.columns if col != args.smiles_column and col not in args.ignore_columns]
 
+    if not args.output:
+        args.output = args.input.split('.')[0] 
+
     # Setup splitter #############################################
     if args.clustering == 'random':
         splitter = RandomGloballyBalancedSplit(n_clusters=args.n_clusters, seed=args.random_seed)
+        args.output += '_RGBS.'
     elif args.clustering == 'dissimilarity':
         splitter = DissimilarityDrivenGloballyBalancedSplit(similarity_threshold=args.cluster_threshold)
+        args.output += '_DGBS.'
+    elif args.clustering == 'scaffold':
+        splitter = ScaffoldDrivenGloballyBalancedSplit()
+        args.output += '_SGBS.'
     
     # Split data #################################################
     df = splitter(df, time_limit_seconds=args.time_limit, min_distance=args.min_Tanimoto_distance, sizes=args.sizes, targets=args.target_columns, smiles_column=args.smiles_column)
 
     # Write output ###############################################
     
-    if not args.output:
-        args.output = args.input.split('.')[0] 
-    
-    # Add clustering method to output file name
-    args.output += '_RGBS.' if args.clustering == 'random' else '_DGBS.'
     # Use same extension  and compression as input file
     args.output += '.'.join(args.input.split('.')[1:])
 

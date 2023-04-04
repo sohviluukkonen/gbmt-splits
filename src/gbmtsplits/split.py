@@ -3,15 +3,16 @@ import tqdm
 import numpy as np
 import pandas as pd
 
+from pulp import *
+from typing import List, Dict
 from abc import ABC, abstractmethod
 
 from rdkit import Chem, DataStructs
 from rdkit.Chem import rdMolDescriptors
+from rdkit.Chem.Scaffolds import MurckoScaffold
 from rdkit.SimDivFilters import rdSimDivPickers
 
-from typing import List, Dict
-
-from pulp import *
+from time import time as timer
 
 
 class GloballyBalancedSplit(ABC):
@@ -80,6 +81,8 @@ class GloballyBalancedSplit(ABC):
         if targets is None:
             if ignore_columns is None: ignore_columns = []
             targets = [c for c in data.columns if c != smiles_column and c not in ignore_columns]
+            targets = [c for c in targets if 'Subset' not in c and 'MinInterSetTd' not in c]
+        print('Targets for the balancing are', targets)
 
 
         # Check for each target if all values are integers (i.e. classification) and create a seperate target for each class
@@ -414,6 +417,56 @@ class RandomGloballyBalancedSplit(GloballyBalancedSplit):
         print('Molecules were randomly clustered into {} clusters.'.format(len(clusters)))
 
         return clusters
+    
+class ScaffoldDrivenGloballyBalancedSplit(GloballyBalancedSplit):
+    """
+    Split the data into clusters based on scaffold similarity and assign each cluster to a subset by linear programming
+    to ensure balanced subsets for each target.
+    """
+
+    def __init__(self, scaffold='Murcko'):
+        super().__init__()
+        """
+        Parameters
+        ----------
+        scaffold : str, optional
+            Scaffold type, by default 'Murcko'
+        """
+        self.scaffold = scaffold
+
+    def clustering(self, smiles_list : List[str]) -> Dict[int, List[int]]:
+        """
+        Clustering of molecules based on scaffold similarity.
+
+        Parameters
+        ----------
+        smiles_list : List[str]
+            List of SMILES strings
+        
+        Returns
+        -------
+        Dict[List[int]]
+            Dictionary of clusters and list of indices of molecules in the cluster
+        """
+
+        mols = [ Chem.MolFromSmiles(smiles) for smiles in smiles_list ]
+
+        if self.scaffold == 'Murcko':
+            scaffolds = [ MurckoScaffold.GetScaffoldForMol(mol) for mol in mols ]
+        else:
+            raise ValueError('Scaffold type not supported.')
+
+        unique_scaffolds = list(set(scaffolds))
+        
+        # Cluster molecules based of which scaffold they belong to
+        clusters = { i: [] for i in range(len(unique_scaffolds)) }
+        for i, scaffold in enumerate(unique_scaffolds):
+            indices = [ j for j, s in enumerate(scaffolds) if s == scaffold ]
+            clusters[i] = indices
+
+        print('Molecules were clustered into {} clusters based on {} scaffolds.'.format(len(clusters), self.scaffold))
+
+        return clusters
         
 class DissimilarityDrivenGloballyBalancedSplit(GloballyBalancedSplit):
     """ 
@@ -471,7 +524,7 @@ class DissimilarityDrivenGloballyBalancedSplit(GloballyBalancedSplit):
 
         # Assign the points to clusters
         print('Assigning points to clusters...')
-        best_cluster = np.argmax(sims,axis=0)
+        best_cluster = np.argmax(sims,axis=0) # shape of best_cluster is (len(fps),)
         for i, idx in enumerate(best_cluster):
             if i not in centroids_indices:
                 clusters[idx].append(i)
@@ -479,84 +532,3 @@ class DissimilarityDrivenGloballyBalancedSplit(GloballyBalancedSplit):
         print('Molecules were clustered based on dissimilarity into {} clusters.'.format(len(clusters)))
 
         return clusters
-
-
-def CommandLineInterface():
-
-    # Parse command line arguments ###############################
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-
-    parser.add_argument('-i', '--input', type=str, required=True,
-                        help='Input file with the data in a pivoted csv/tsv format. A column with the SMILES must be provided and each target must be in a separate column.')
-    parser.add_argument('-o', '--output', type=str, default=None,
-                        help='Output file with the data with additional columns the assigned subset (and Minimum interset Tanimoto distance).')
-    parser.add_argument('-sc','--smiles_column', type=str, default='SMILES',
-                        help='Name of the column with the SMILES')
-    parser.add_argument('-tc','--target_columns', type=str, nargs='+', default=None,
-                        help="Name of the columns with the targets. If not provided, all columns except the SMILES and --ignore_columns' columns will be used")
-    parser.add_argument('-ic','--ignore_columns', type=str, nargs='+', default=None,
-                        help='Name of the columns to ignore')
-    parser.add_argument('-c','--clustering', type=str, default='dissimilarity',
-                        help='Clustering algorithm to use. Options: random, dissimilarity')
-    parser.add_argument('-nc','--n_clusters', type=int, default=None,
-                        help='Number of clusters to use. Only used for random clustering. If None, the number of clusters is equal to the number of molecules divided by 100')
-    parser.add_argument('-rs','--random_seed', type=int, default=42,
-                        help='Seed for the random clustering')
-    parser.add_argument('-ct','--cluster_threshold', type=float, default=0.7,
-                        help='Minimum distance between cluster centers. Only used for dissimilarity clustering.')
-    parser.add_argument('-s', '--sizes', type=float, nargs='+', default=[0.8, 0.1, 0.1],
-                        help='Sizes of the subsets')
-    parser.add_argument('-t','--time_limit', type=int, default=60,
-                        help='Time limit for linear combination of clusters in seconds')
-    parser.add_argument('-mtd', '--min_Tanimoto_distance', action='store_true',
-                        help='Compute the minimum Tanimoto distance between a molecule in a subset and the molecules in the other subsets')
-    
-    # Start the timer
-    start_time = timer()
-    
-    args = parser.parse_args()
-    
-    # Read input data from csv/tsv file ##########################
-    if '.csv' in args.input:
-        df = pd.read_csv(args.input)
-    elif '.tsv' in args.input:
-        df = pd.read_csv(args.input, sep='\t')
-    else:
-        raise ValueError('Input file must be a csv or tsv file')
-    
-    if args.target_columns is None and args.ignore_columns is None:
-        args.target_columns = [col for col in df.columns if col != args.smiles_column]
-    elif args.target_columns is None and args.ignore_columns is not None:
-        args.target_columns = [col for col in df.columns if col != args.smiles_column and col not in args.ignore_columns]
-
-    # Setup splitter #############################################
-    if args.clustering == 'random':
-        splitter = RandomGloballyBalancedSplit(n_clusters=args.n_clusters, seed=args.random_seed)
-    elif args.clustering == 'dissimilarity':
-        splitter = DissimilarityDrivenGloballyBalancedSplit(similarity_threshold=args.cluster_threshold)
-    
-    # Split data #################################################
-    df = splitter(df, time_limit_seconds=args.time_limit, min_distance=args.min_Tanimoto_distance, sizes=args.sizes, targets=args.target_columns, smiles_column=args.smiles_column)
-
-    # Write output ###############################################
-    
-    if not args.output:
-        args.output = args.input.split('.')[0] 
-    
-    # Add clustering method to output file name
-    args.output += '_RGBS.' if args.clustering == 'random' else '_DGBS.'
-    # Use same extension  and compression as input file
-    args.output += '.'.join(args.input.split('.')[1:])
-
-    if '.csv' in args.output:
-        df.to_csv(args.output, index=False)
-    elif '.tsv' in args.output:
-        df.to_csv(args.output, sep='\t', index=False)
-    
-    # Print elapsed time #########################################
-    elapsed_time = timer() - start_time
-    print('Elapsed time: {:.2f} seconds'.format(elapsed_time))
-        
-if __name__ == '__main__':
-
-    CommandLineInterface()
