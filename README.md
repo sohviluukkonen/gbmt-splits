@@ -4,6 +4,8 @@ A tool to create well-balanced multi-task splits without data leakage between di
 
 This package is based on the work of Giovanni Tricarico presented in [Construction of balanced, chemically dissimilar training, validation and test sets for machine learning on molecular datasets](https://chemrxiv.org/engage/chemrxiv/article-details/6253d85d88636ca19c0de92d). 
 
+Three splits are available: random-, dissimilarity- (clustering based on Tanimoto similarity of fingerprints) and scaffold-based (clustering based on Murcko scaffolds).
+
 # Installation
 
 ```
@@ -16,9 +18,9 @@ pip install git+ssh:git@github.com:sohviluukkonen/gbmt-splits.git
 The split can be easily created from the command line with
 
 ```
-gbmtsplits -i <dataset.csv> -c <random/dissimilarity> 
+gbmtsplits -i <dataset.csv> -c <random/dissimilarity/scaffold> 
 ```
-with <datasets.csv> an pivote dataset where each row corresponds to a unique molecules and each task has it's own column. For more options use `-h/--help`.
+with <datasets.csv> an pivoted dataset where each row corresponds to a unique molecules and each task has it's own column. For more options use `-h/--help`.
 
 ## API
 
@@ -27,17 +29,24 @@ The splits can be also created (more options for linear programming to merge ini
 Load or create pivoted dataset (each row corresponds to a unique molecules and each task has it's own column)
 ```
 import pandas as pd
-dataset = pd.read_csv('data.csv')
+dataset = pd.read_csv('dataset.csv')
 ```
 
-Splitting data with a random initial clustering of molecules
+Splitting data with a random initial clustering of molecules,
 ```
 from gbmtsplits import RandomGloballyBalancedSplit as rgbs
 splitter = rgbs()
 data_rgbs = splitter(data, min_distance=True)
 ```
 
-or molecular dissimialrity-based clustering
+or scaffold-based clustering,
+```
+from gbmtsplits import ScaffoldDrivenGloballyBalancedSplit as sgbs
+splitter = sgbs()
+data_dgbs = splitter(data, min_distance=True)
+```
+
+or molecular dissimilarity-based clustering
 ```
 from gbmtsplits import DissimilarityDrivenGloballyBalancedSplit as dgbs
 splitter = dgbs()
