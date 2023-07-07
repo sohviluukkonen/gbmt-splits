@@ -89,7 +89,7 @@ class GloballyBalancedSplit(ABC):
         original_targets = targets
         targets = []
         for target in original_targets:
-            if all(x.is_integer() for x in data[target].dropna()):
+            if all(isinstance(x, int) for x in data[target].dropna()):
                 print(f'{target} seems to be a classification labels. A separate target is created for each class for the balancing.')
                 for c in data[target].dropna().unique():
                     data[target + '_' + str(c)] = (data[target] == c).map({True: 1, False: np.nan})
@@ -112,9 +112,10 @@ class GloballyBalancedSplit(ABC):
         self.printBalanceMetrics(data, targets)
             
         # Compute the minimum inter-subset Tanimoto distance
-        if min_distance: self.computeInterSubsetMinimumTanimotoDistance(data, smiles_column)
+        if min_distance: 
+            self.computeInterSubsetMinimumTanimotoDistance(data, smiles_column)
                 
-        return data        
+        return data
 
     
     @abstractmethod

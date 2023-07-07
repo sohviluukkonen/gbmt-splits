@@ -1,8 +1,9 @@
 import argparse
 import pandas as pd
 from timeit import default_timer as timer
-from .split import RandomGloballyBalancedSplit, DissimilarityDrivenGloballyBalancedSplit, ScaffoldDrivenGloballyBalancedSplit
-
+#from .split import RandomGloballyBalancedSplit, DissimilarityDrivenGloballyBalancedSplit, ScaffoldDrivenGloballyBalancedSplit
+from .splits import GloballyBalancedSplit
+from .clustering import RandomClustering, LeaderPickerClustering, MaxMinClustering, MurckoScaffoldClustering
 
 def main():
 
@@ -10,19 +11,26 @@ def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     parser.add_argument('-i', '--input', type=str, required=True,
-                        help='Input file with the data in a pivoted csv/tsv format. A column with the SMILES must be provided and each target must be in a separate column.')
+                        help='Input file with the data in a pivoted csv/tsv format. \
+                            A column with the SMILES must be provided and each target must be in a separate column.')
     parser.add_argument('-o', '--output', type=str, default=None,
-                        help='Output file with the data with additional columns the assigned subset (and Minimum interset Tanimoto distance).')
+                        help='Output file with the data with additional columns \
+                            the assigned subset (and Minimum interset Tanimoto distance).')
     parser.add_argument('-sc','--smiles_column', type=str, default='SMILES',
                         help='Name of the column with the SMILES')
     parser.add_argument('-tc','--target_columns', type=str, nargs='+', default=None,
-                        help="Name of the columns with the targets. If not provided, all columns except the SMILES and --ignore_columns' columns will be used")
+                        help="Name of the columns with the targets. If not provided, \
+                            all columns except the SMILES and --ignore_columns' columns will be used")
     parser.add_argument('-ic','--ignore_columns', type=str, nargs='+', default=None,
                         help='Name of the columns to ignore')
-    parser.add_argument('-c','--clustering', type=str, default='dissimilarity',
-                        help='Clustering algorithm to use. Options: random, dissimilarity or scaffold')
+    parser.add_argument('-ns', '--n_splits', type=int, default=1,
+                         help='Number of splits to generate')
+    parser.add_argument('-c','--clustering', type=str, default='dissimilarity_leader',
+                        help='Clustering algorithm to use. \
+                            Options: random, dissimilarity_leader, dissimilarity_maxmin or murcko')
     parser.add_argument('-nc','--n_clusters', type=int, default=None,
-                        help='Number of clusters to use. Only used for random clustering. If None, the number of clusters is equal to the number of molecules divided by 100')
+                        help='Number of clusters to use. Only used for random clustering. \
+                            If None, the number of clusters is equal to the number of molecules divided by 100')
     parser.add_argument('-rs','--random_seed', type=int, default=42,
                         help='Seed for the random clustering')
     parser.add_argument('-ct','--cluster_threshold', type=float, default=0.7,
@@ -57,17 +65,30 @@ def main():
 
     # Setup splitter #############################################
     if args.clustering == 'random':
-        splitter = RandomGloballyBalancedSplit(n_clusters=args.n_clusters, seed=args.random_seed)
+        clustering = RandomClustering(n_clusters=args.n_clusters, seed=args.random_seed)
         args.output += '_RGBS.'
-    elif args.clustering == 'dissimilarity':
-        splitter = DissimilarityDrivenGloballyBalancedSplit(similarity_threshold=args.cluster_threshold)
-        args.output += '_DGBS.'
-    elif args.clustering == 'scaffold':
-        splitter = ScaffoldDrivenGloballyBalancedSplit()
-        args.output += '_SGBS.'
+    elif args.clustering == 'dissimilarity_leader':
+        clustering = LeaderPickerClustering(similarity_threshold=args.cluster_threshold)
+        args.output += '_LPDGBS.'
+    elif args.clustering == 'dissimilarity_maxmin':
+        clustering = MaxMinClustering(n_clusters=args.n_clusters, seed=args.random_seed)
+        args.output += '_MMDGBS.'
+    elif args.clustering == 'murcko':
+        clustering = MurckoScaffoldClustering()
+        args.output += '_MSGBS.'
+    else:
+        raise ValueError('Clustering algorithm not recognized')
+
+    splitter = GloballyBalancedSplit(
+        sizes = args.sizes,
+        clustering_method=clustering,
+        time_limit_seconds=args.time_limit,
+        min_distance=args.min_Tanimoto_distance,
+        n_splits=args.n_splits
+        )
     
     # Split data #################################################
-    df = splitter(df, time_limit_seconds=args.time_limit, min_distance=args.min_Tanimoto_distance, sizes=args.sizes, targets=args.target_columns, smiles_column=args.smiles_column)
+    df = splitter(df, targets=args.target_columns, smiles_column=args.smiles_column)
 
     # Write output ###############################################
     
