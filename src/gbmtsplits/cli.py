@@ -1,8 +1,7 @@
 import argparse
 import pandas as pd
 from timeit import default_timer as timer
-#from .split import RandomGloballyBalancedSplit, DissimilarityDrivenGloballyBalancedSplit, ScaffoldDrivenGloballyBalancedSplit
-from .splits import GloballyBalancedSplit
+from .split import GloballyBalancedSplit
 from .clustering import RandomClustering, LeaderPickerClustering, MaxMinClustering, MurckoScaffoldClustering
 
 def main():
