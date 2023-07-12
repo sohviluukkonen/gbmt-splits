@@ -4,7 +4,7 @@ A tool to create well-balanced multi-task splits without data leakage between di
 
 This package is based on the work of Giovanni Tricarico presented in [Construction of balanced, chemically dissimilar training, validation and test sets for machine learning on molecular datasets](https://chemrxiv.org/engage/chemrxiv/article-details/6253d85d88636ca19c0de92d). 
 
-Three splits are available: random-, dissimilarity- (clustering based on Tanimoto similarity of fingerprints) and scaffold-based (clustering based on Murcko scaffolds).
+Three splits are available: random-, dissimilarity- (clustering based on Tanimoto similarity of fingerprints with MaxMin or LeaderPicker) and scaffold-based (clustering based on Murcko scaffolds).
 
 # Installation
 
@@ -18,7 +18,7 @@ pip install git+ssh:git@github.com:sohviluukkonen/gbmt-splits.git
 The split can be easily created from the command line with
 
 ```
-gbmtsplits -i <dataset.csv> -c <random/dissimilarity/scaffold> 
+gbmtsplits -i <dataset.csv> -c <random/dissimilarity_maxmin/dissimilarity_leader/scaffold> 
 ```
 with <datasets.csv> an pivoted dataset where each row corresponds to a unique molecules and each task has it's own column. For more options use `-h/--help`.
 
@@ -26,33 +26,25 @@ with <datasets.csv> an pivoted dataset where each row corresponds to a unique mo
 
 The splits can be also created (more options for linear programming to merge initial clusters) and visualised with an API. 
 
-Load or create pivoted dataset (each row corresponds to a unique molecules and each task has it's own column)
 ```
 import pandas as pd
+from gbmtsplits.split import GloballyBalancedSplit
+from gbmtsplits.clustering import RandomClustering, MaxMinClustering, LeaderPickerClustering, MurckoScaffoldClustering
+
+# Load dataset or create pivoted dataset (each row corresponds to a unique molecules and each task has it's own column)
 dataset = pd.read_csv('dataset.csv')
-```
 
-Splitting data with a random initial clustering of molecules,
-```
-from gbmtsplits import RandomGloballyBalancedSplit as rgbs
-splitter = rgbs()
-data_rgbs = splitter(data, min_distance=True)
-```
+# Set up splitter with a initial clustering method
+clustering_method = MaxMinClustering() # For dissimilarity based clustering using MaxMin algorithm to pick cluster centroids
+splitter = GloballyBalancedSplit(clustering_method=clustering_method)
 
-or scaffold-based clustering,
-```
-from gbmtsplits import ScaffoldDrivenGloballyBalancedSplit as sgbs
-splitter = sgbs()
-data_dgbs = splitter(data, min_distance=True)
-```
+# or use dictionnary with precalculates clusters with keys cluster indices and values list of indices of molecules part of the cluster
+clusters = {0 : [1,4,7,...], 1 : [2,3,8,...], ...}
+splitter = GloballyBalancedSplit(clusters=clusters)
 
-or molecular dissimilarity-based clustering
+# Split the data
+data = splitter(data=data)
 ```
-from gbmtsplits import DissimilarityDrivenGloballyBalancedSplit as dgbs
-splitter = dgbs()
-data_dgbs = splitter(data, min_distance=True)
-```
-as `min_distance=True`, the minimum Tanimoto distance between a molecule in a subset and all the molecules in the other subsets.
 
 The chemical (dis)similarity of the subsets and the balance of subsets per task can visualized either for a single dataset/split:
 ```
