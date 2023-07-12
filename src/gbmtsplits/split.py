@@ -71,7 +71,7 @@ class GloballyBalancedSplit:
             self,
             data : pd.DataFrame,
             smiles_column : str = 'SMILES',
-            targets : List[str] = None,
+            tasks : List[str] = None,
             ignore_columns : List[str] = None,
             ) -> pd.DataFrame:
         
@@ -81,11 +81,11 @@ class GloballyBalancedSplit:
         Parameters
         ----------
         data : pd.DataFrame
-            Dataframe with SMILES strings and targets.
+            Dataframe with SMILES strings and tasks.
         smiles_column : str, optional
             Name of the column with SMILES strings.
-        targets : List[str], optional
-            List of target columns.
+        tasks : List[str], optional
+            List of task columns.
         ignore_columns : List[str], optional
             List of columns to ignore.
         
@@ -104,14 +104,15 @@ class GloballyBalancedSplit:
                 raise ValueError(f'n_splits > 1 does not work with type \
                                   {type(self.clustering_method).__name__}.')
 
+        self.df = data.copy()
         self.smiles_column = smiles_column
         self.ignore_columns = ignore_columns
         
-        # Save the original targets and create the targets for balancing
-        self._set_original_targets(data, targets)
-        self._set_targets_for_balancing(data)
+        # Save the original tasks and create the tasks for balancing
+        self._set_original_tasks(tasks)
+        self._set_tasks_for_balancing()
 
-        smiles_list = data[smiles_column].tolist()
+        smiles_list = self.df[smiles_column].tolist()
 
         for split in range(self.n_splits):
 
@@ -122,13 +123,22 @@ class GloballyBalancedSplit:
                 split_name = f'Split_{split}'
                 mintd_name = f'minInterSetTd_{split}'
 
+            txt = f' {split_name} '
+            n = int((80 - len(txt)) / 2)
+            print('=' * n + txt + '=' * n)
+            print(f'Clustering method: {self.clustering_method.get_name() if self.clustering_method else "precomputed clusters"}')
+            print(f'Original tasks: {self.original_tasks}')
+            print(f'Tasks for balancing: {self.tasks_for_balancing}')
+            print(f'Subset sizes: {self.sizes}')
+
             # Cluster molecules
             if self.clusters :
                 clusters = self.clusters
             else:
                 clusters = self.clustering_method(smiles_list)
-            # Compute the number of datapoints per task for each cluster
-            tasks_per_cluster = self._compute_tasks_per_cluster(data, self.targets_for_balancing, clusters)
+            print(f'Number of initial clusters: {len(clusters)}')
+            # Compute the number of self.dfpoints per task for each cluster
+            tasks_per_cluster = self._compute_tasks_per_cluster(self.tasks_for_balancing, clusters)
             
             # Merge the clusters with a linear programming method to create the subsets
             merged_clusters_mapping = self._merge_clusters_with_balancing_mapping(
@@ -139,81 +149,83 @@ class GloballyBalancedSplit:
                 self.time_limit_seconds,
                 self.n_jobs)  
             for i, idx in clusters.items(): 
-                data.loc[idx, split_name] = merged_clusters_mapping[i]-1
+                self.df.loc[idx, split_name] = merged_clusters_mapping[i]-1
+
+            # Print balance
+            self._compute_task_balace(split_name)
         
             # Compute the minimum interset distance between the splits
             if self.min_distance:
                 if hasattr(self.clustering_method, 'fp_calculator'):
                     fp_calculator = self.clustering_method.fp_calculator
-                    self._compute_min_interset_Tanimoto_distances(data, split_name, mintd_name, fp_calculator)
+                    self._compute_min_interset_Tanimoto_distances(split_name, mintd_name, fp_calculator)
                 else:
-                    self._compute_min_interset_Tanimoto_distances(data, split_name, mintd_name)
+                    self._compute_min_interset_Tanimoto_distances(split_name, mintd_name)
 
-            # Print balance and chemical bias metrics
-            self._print_metrics(data)
+            # # Print balance and chemical bias metrics
+            # self._print_metrics(self.df)
 
             # Update clustering seed
             if self.n_splits > 1:
                 self.clustering_method.seed += 1
 
 
-        # Drop the targets for balancing
-        cols2drop = [col for col in self.targets_for_balancing if col not in self.original_targets]
-        data.drop(cols2drop, axis=1, inplace=True)
+        # Drop the tasks for balancing
+        cols2drop = [col for col in self.tasks_for_balancing if col not in self.original_tasks]
+        self.df.drop(cols2drop, axis=1, inplace=True)
 
-        return data
+        return self.df
 
 
-    def _compute_tasks_per_cluster(self, 
-                               df : pd.DataFrame,
-                               targets : List[str],
-                               clusters : Dict[int, List[int]]) -> Dict[int, List[str]]:
+    def _compute_tasks_per_cluster(
+            self, 
+            tasks : List[str],
+            clusters : Dict[int, List[int]]
+        ) -> Dict[int, List[str]]:
         
         """
         Compute the number of datapoints per task for each cluster.
 
         Parameters
         ----------
-        df : pd.DataFrame
-            DataFrame with the data
-        targets : List[str]
-            List of targets
+        tasks : List[str]
+            List of tasks
         clusters : Dict[int, List[int]]
             Dictionary of clusters and list of indices of molecules in the cluster
 
         Returns
         -------
-        np.array of shape (len(targets)+1, len(clusters))
-            Array with each columns correspoding to a cluster and each row to a target
+        np.array of shape (len(tasks)+1, len(clusters))
+            Array with each columns correspoding to a cluster and each row to a task
             plus the 1st row for the number of molecules per cluster
         """
 
-        target_vs_clusters = np.zeros((len(targets)+1, len(clusters)))
-        target_vs_clusters[0,:] = [ len(cluster) for cluster in clusters.values() ]
+        task_vs_clusters = np.zeros((len(tasks)+1, len(clusters)))
+        task_vs_clusters[0,:] = [ len(cluster) for cluster in clusters.values() ]
 
-        for i, target in enumerate(targets):
+        for i, task in enumerate(tasks):
             for j, indices_per_cluster in clusters.items():
-                data_per_cluster = df.iloc[indices_per_cluster]
-                target_vs_clusters[i+1,j] = data_per_cluster[target].dropna().shape[0]
+                self.df_per_cluster = self.df.iloc[indices_per_cluster]
+                task_vs_clusters[i+1,j] = self.df_per_cluster[task].dropna().shape[0]
 
-        return target_vs_clusters  
+        return task_vs_clusters  
     
     # Bash command to delete conda environment
     # conda env remove --name myenv
 
         
-    def _set_original_targets(self, data : pd.DataFrame, targets : List[str] | None) -> None:
+    def _set_original_tasks(self, tasks : List[str] | None) -> None:
         """
-        Set the original targets.
+        Set the original tasks.
         
         Parameters
         ----------
-        data : pd.DataFrame
-            Dataframe with SMILES strings and targets.
+        tasks : List[str] | None
+            List of task columns.
         """
 
-        if targets is None:
-            columns = data.columns.tolist()
+        if tasks is None:
+            columns = self.df.columns.tolist()
             # Drop the SMILES column.
             columns.remove(self.smiles_column)
             # Drop the ignore columns.
@@ -222,33 +234,28 @@ class GloballyBalancedSplit:
             # Drop columns starting with 'Split' and 'MinIntersetDistance'.
             columns = [column for column in columns if not column.startswith('Split')]
             columns = [column for column in columns if not column.startswith('MinIntersetDistance')]
-            # Set original targets.
-            self.original_targets = columns
+            # Set original tasks.
+            self.original_tasks = columns
         else:
-            self.original_targets = targets
+            self.original_tasks = tasks
 
-    def _set_targets_for_balancing(self, data : pd.DataFrame) -> None:
+    def _set_tasks_for_balancing(self) -> None:
 
         """
-        Set the targets for balancing. If all values for a target are integers, 
-        the target is considered a classification target, and a separate column is
-        created for each class. If the target is not a classification target,
-        the target is considered a regression target, and the target is used as is.
-
-        Parameters
-        ----------
-        data : pd.DataFrame
-            Dataframe with SMILES strings and targets.
+        Set the tasks for balancing. If all values for a task are integers, 
+        the task is considered a classification task, and a separate column is
+        created for each class. If the task is not a classification task,
+        the task is considered a regression task, and the task is used as is.
         """
 
-        self.targets_for_balancing = []
-        for target in self.original_targets:
-            if all(isinstance(x, int) for x in data[target].dropna()):
-                for cls in data[target].dropna().unique():
-                    data[target + '_' + str(cls)] = (data[target] == cls).map({True: 1, False: np.nan})
-                    self.targets_for_balancing.append(f'{target}_{cls}')
+        self.tasks_for_balancing = []
+        for task in self.original_tasks:
+            if all( x % 1 == 0 for x in self.df[task].dropna()):
+                for cls in self.df[task].dropna().unique():
+                    self.df[task + '_' + str(cls)] = (self.df[task] == cls).map({True: 1, False: np.nan})
+                    self.tasks_for_balancing.append(f'{task}_{cls}')
             else:
-                self.targets_for_balancing.append(target)
+                self.tasks_for_balancing.append(task)
 
     def _merge_clusters_with_balancing_mapping(
             self, 
@@ -259,26 +266,26 @@ class GloballyBalancedSplit:
             time_limit_seconds : int = 60*60,
             max_N_threads : int = 1) -> List[List[int]]:
             """
-            Linear programming function needed to balance the data while merging clusters.
+            Linear programming function needed to balance the self.df while merging clusters.
 
             Paper: Tricarico et al., Construction of balanced, chemically dissimilar training, validation 
-            and test sets for machine learning on molecular datasets, 2022, 
+            and test sets for machine learning on molecular self.dfsets, 2022, 
             DOI: https://doi.org/10.26434/chemrxiv-2022-m8l33-v2
 
             Parameters
             ----------
             tasks_vs_clusters_array : 2D np.array
-                - the cross-tabulation of the number of data points per cluster, per task.
+                - the cross-tabulation of the number of self.df points per cluster, per task.
                 - columns represent unique clusters.
                 - rows represent tasks, except the first row, which represents the number of records (or compounds).
-                - Optionally, instead of the number of data points, the provided array may contain the *percentages*
-                    of data points _for the task across all clusters_ (i.e. each *row*, NOT column, may sum to 1).
-                IMPORTANT: make sure the array has 2 dimensions, even if only balancing the number of data records,
+                - Optionally, instead of the number of self.df points, the provided array may contain the *percentages*
+                    of self.df points _for the task across all clusters_ (i.e. each *row*, NOT column, may sum to 1).
+                IMPORTANT: make sure the array has 2 dimensions, even if only balancing the number of self.df records,
                     so there is only 1 row. This can be achieved by setting ndmin = 2 in the np.array function.
             sizes : list
                 - list of the desired final sizes (will be normalised to fractions internally).
             equal_weight_perc_compounds_as_tasks : bool
-                - if True, matching the % records will have the same weight as matching the % data of individual tasks.
+                - if True, matching the % records will have the same weight as matching the % self.df of individual tasks.
                 - if False, matching the % records will have a weight X times larger than the X tasks.
             relative_gap : float
                 - the relative gap between the absolute optimal objective and the current one at which the solver
@@ -307,7 +314,7 @@ class GloballyBalancedSplit:
 
             S = len(sizes)
 
-            # Normalise the data matrix
+            # Normalise the self.df matrix
             tasks_vs_clusters_array = tasks_vs_clusters_array / tasks_vs_clusters_array.sum(axis = 1, keepdims = True)
 
             # Find the number of tasks + compounds (M) and the number of initial clusters (N)
@@ -316,13 +323,13 @@ class GloballyBalancedSplit:
                 errormessage = 'The requested number of new clusters to make ('+ str(S) + ') cannot be larger than the initial number of clusters (' + str(N) + '). Please review.'
                 raise ValueError(errormessage)
 
-            # Given matrix A (M x N) of fraction of data per cluster, assign each cluster to one of S final ML subsets,
-            # so that the fraction of data per ML subset is closest to the corresponding fraction_size.
+            # Given matrix A (M x N) of fraction of self.df per cluster, assign each cluster to one of S final ML subsets,
+            # so that the fraction of self.df per ML subset is closest to the corresponding fraction_size.
             # The weights on each ML subset (WML, S x 1) are calculated from fractional_sizes harmonic-mean-like.
             # The weights on each task (WT, M x 1) are calculated as requested by the user.
             # In the end: argmin SUM(ABS((A.X-T).WML).WT)
             # where X is the (N x S) binary solution matrix
-            # where T is the (M x S) matrix of target fraction sizes (repeat of fractional_sizes)
+            # where T is the (M x S) matrix of task fraction sizes (repeat of fractional_sizes)
             # constraint: assign one cluster to one and only one final ML subset
             # i.e. each row of X must sum to 1
 
@@ -376,7 +383,7 @@ class GloballyBalancedSplit:
 
             # Solve the model
             prob.solve(PULP_CBC_CMD(gapRel = relative_gap, timeLimit = time_limit_seconds, threads = max_N_threads, msg=False))
-            #solver.tmpDir = "/zfsdata/data/erik/erik-rp1/pQSAR/scaffoldsplit_trial/tmp"
+            #solver.tmpDir = "/zfsself.df/self.df/erik/erik-rp1/pQSAR/scaffoldsplit_trial/tmp"
             #prob.solve(solver)
 
             # Extract the solution
@@ -390,7 +397,6 @@ class GloballyBalancedSplit:
 
     def _compute_min_interset_Tanimoto_distances(
             self, 
-            df, 
             split_col = 'Split',
             mTd_col = 'minInterSetTd',
             fp_calculator = GetMorganGenerator(radius=3, fpSize=2048)
@@ -400,45 +406,82 @@ class GloballyBalancedSplit:
         
         Parameters
         ----------
-        df : pd.DataFrame
-            Dataframe containing the data with a column 'Split' containing the subset number
         split_col : str, optional
             Name of the column containing the subset number, by default 'Split'
         mTd_col : str, optional
             Name of the column to store the minimum Tanimoto distance in, by default 'minInterSetTd'
         fp_calculator : rdkit.Chem.rdMolDescriptors.GetMorganGenerator, optional
             Fingerprint calculator, by default GetMorganGenerator(radius=3, nBits=2048)
-        
-        Returns
-        -------
-        pd.DataFrame
-            Dataframe containing the data with a column 'MinInterSetTd' containing the minimum Tanimoto distance
-
         """
 
+        # Print header
+        txt = f' Min. inter-set Tanimoto distance '
+        n = int((80 - len(txt)) / 2)
+        print('-' * n + txt + '-' * n) 
+
         # Compute fingerprints
-        mols = [ Chem.MolFromSmiles(smi) for smi in df[self.smiles_column].tolist() ]
+        mols = [ Chem.MolFromSmiles(smi) for smi in self.df[self.smiles_column].tolist() ]
         fps = [ fp_calculator.GetFingerprint(mol) for mol in mols ]
 
         min_distances = np.zeros(len(fps))
-        # Iterate over subsets and compute minimum Tanimoto distance per compound to the compounds in the other subsets
-        for j in df[split_col].unique():
-            ref_idx = df[df[split_col] == j].index.tolist()
+        # Iterate over subsets and compute minimum Tanimoto distance per compound 
+        # to the compounds in the other subsets
+        for j in self.df[split_col].unique():
+            ref_idx = self.df[self.df[split_col] == j].index.tolist()
             other_fps = [ fp for i, fp in enumerate(fps) if i not in ref_idx ]
             for i in ref_idx :
                 sims = DataStructs.BulkTanimotoSimilarity(fps[i], other_fps)
                 min_distances[i] = 1. - max(sims)
 
-        df[mTd_col] = min_distances
+        self.df[mTd_col] = min_distances
 
         # Print average and std  of minimum distances per subset
-        txt = f'Average and std of minimum Tanimoto distance per subset ({split_col}):'
-        for subset in sorted(df[split_col].unique()):
-            dist = df[df[split_col] == subset][mTd_col].to_numpy()
-            txt += f' {subset}: {np.mean(dist):.2f} ({np.std(dist):.2f})'
+        for subset in sorted(self.df[split_col].unique()):
+            dist = self.df[self.df[split_col] == subset][mTd_col] #.to_numpy()
+            print(f'Subset {int(subset)}: {dist.mean():.2f} +/- {dist.std():.2f} | {dist.median():.2f}')
+
+        # Chemical dissimilarity score
+        cd_score = self.df.groupby(split_col)[mTd_col].median().min()
+        print(f'Chemical dissimilarity score: {cd_score:.2f}')
+    
+    def _compute_task_balace(self, split_col : str = 'Split'):
+
+        """
+        Compute the task balance per subset.
+        
+        Parameters
+        ----------
+        split_col : str, optional
+            Name of the column containing the subset number, by default 'Split'
+        """
+
+        # Header
+        txt = f' {split_col} balance '
+        n = int((80 - len(txt)) / 2)
+        print('-' * n + txt + '-' * n) 
+
+        # Get name of longets task
+        longest_task = max(self.tasks_for_balancing, key=len)   
+
+        # Subset balance per task
+        for task in self.tasks_for_balancing:
+            txt = f'{task} balance:'
+            txt += ' ' * (len(longest_task) - len(task)) + '\t'
+            counts = self.df[[task, split_col]].groupby(split_col).count()
+            n = counts[task].sum()
+            for subset in sorted(self.df[split_col].unique()):
+                n_subset = counts.loc[subset, task]
+                txt += f' {int(subset)}: {n_subset/n:.2f}\t'
+            print(txt)
+        
+        # Overall balance
+        txt = f'Overall balance:' + ' ' * (len(longest_task) - len(task)) + '\t'
+        counts = self.df[self.tasks_for_balancing].sum(axis=1).groupby(self.df[split_col]).sum()
+        n = counts.sum()
+        balance_score = 0
+        for i, subset in enumerate(sorted(self.df[split_col].unique())):
+            n_subset = counts.loc[subset]
+            txt += f' {int(subset)}: {n_subset/n:.2f}\t'
+            balance_score += np.abs(n_subset/n - self.sizes[i])
         print(txt)
-
-        return df
-
-    def _print_metrics(self, data):
-        pass
+        print(f'Balance score: {balance_score/len(self.sizes):.4f}')
