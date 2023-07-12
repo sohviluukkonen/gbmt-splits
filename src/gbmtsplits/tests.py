@@ -5,8 +5,8 @@ from unittest import TestCase
 
 from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
 
-from gbmtsplits.split import GloballyBalancedSplit
-from gbmtsplits.clustering import RandomClustering, MaxMinClustering, LeaderPickerClustering, MurckoScaffoldClustering
+from .split import GloballyBalancedSplit
+from .clustering import RandomClustering, MaxMinClustering, LeaderPickerClustering, MurckoScaffoldClustering
 
 
 class TestSplits(TestCase):
@@ -27,7 +27,7 @@ class TestSplits(TestCase):
         )
         data = splitter(data)
 
-        assert data.shape[1] == ncols + 1
+        assert data.shape[1] == ncols + 2
         assert data.Split.nunique() == 2
 
     def test_dissimilarity_maxmin_split(self):
@@ -42,7 +42,7 @@ class TestSplits(TestCase):
         )
         data = splitter(data)
 
-        assert data.shape[1] == ncols + 1
+        assert data.shape[1] == ncols + 2
         assert data.Split.nunique() == 4
 
     def test_dissimilarity_leader_split(self):
@@ -58,7 +58,7 @@ class TestSplits(TestCase):
         )
         data = splitter(data)
 
-        assert data.shape[1] == ncols + 1
+        assert data.shape[1] == ncols + 2
         assert data.Split.nunique() == 3
 
     def test_murcko_scaffold_split(self):
@@ -69,6 +69,7 @@ class TestSplits(TestCase):
         splitter = GloballyBalancedSplit(
             clustering_method = clustering,
             time_limit_seconds=self.time_limit,
+            min_distance=False
         )
         data = splitter(data)
 
@@ -87,8 +88,6 @@ class TestSplits(TestCase):
         )
         data = splitter(data)
 
-        assert data.shape[1] == ncols + 3
+        assert data.shape[1] == ncols + (3 * 2)
         for i in range(3):
             assert data[f'Split_{i}'].nunique() == 3
-
-        print(data)

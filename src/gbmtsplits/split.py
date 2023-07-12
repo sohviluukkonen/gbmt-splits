@@ -49,7 +49,7 @@ class GloballyBalancedSplit:
             relative_gap : float = 0.1,
             time_limit_seconds : int = 60,
             n_jobs : int = 1,
-            min_distance : bool = False,    
+            min_distance : bool = True,    
             ) -> None:     
         
         if clusters is None and clustering_method is None:
@@ -113,7 +113,14 @@ class GloballyBalancedSplit:
 
         smiles_list = data[smiles_column].tolist()
 
-        if self.n_splits == 1:
+        for split in range(self.n_splits):
+
+            if self.n_splits == 1:
+                split_name = 'Split'
+                mintd_name = 'minInterSetTd'
+            else:
+                split_name = f'Split_{split}'
+                mintd_name = f'minInterSetTd_{split}'
 
             # Cluster molecules
             if self.clusters :
@@ -132,36 +139,23 @@ class GloballyBalancedSplit:
                 self.time_limit_seconds,
                 self.n_jobs)  
             for i, idx in clusters.items(): 
-                data.loc[idx, 'Split'] = merged_clusters_mapping[i]
-
-        else:
-            for split in range(self.n_splits):
-                # Cluster molecules
-                clusters = self.clustering_method(smiles_list)
-                # Compute the number of datapoints per task for each cluster
-                tasks_per_cluster = self._compute_tasks_per_cluster(data, self.targets_for_balancing, clusters)
-                
-                # Merge the clusters with a linear programming method to create the subsets
-                merged_clusters_mapping = self._merge_clusters_with_balancing_mapping(
-                    tasks_per_cluster, 
-                    self.sizes, 
-                    self.equal_weight_perc_compounds_as_tasks, 
-                    self.relative_gap,
-                    self.time_limit_seconds,
-                    self.n_jobs)  
-                for i, idx in clusters.items(): 
-                    data.loc[idx, f'Split_{split}'] = merged_clusters_mapping[i]
-
-                # Update clustering seed
-                self.clustering_method.seed += 1
+                data.loc[idx, split_name] = merged_clusters_mapping[i]-1
         
-        # Compute the minimum interset distance between the splits
-        if self.min_distance:
-            raise NotImplementedError('Minimum interset distance not implemented yet.')
-            self._compute_min_interset_distances(data)
+            # Compute the minimum interset distance between the splits
+            if self.min_distance:
+                if hasattr(self.clustering_method, 'fp_calculator'):
+                    fp_calculator = self.clustering_method.fp_calculator
+                    self._compute_min_interset_Tanimoto_distances(data, split_name, mintd_name, fp_calculator)
+                else:
+                    self._compute_min_interset_Tanimoto_distances(data, split_name, mintd_name)
 
-        # Print balance and chemical bias metrics
-        self._print_metrics(data)
+            # Print balance and chemical bias metrics
+            self._print_metrics(data)
+
+            # Update clustering seed
+            if self.n_splits > 1:
+                self.clustering_method.seed += 1
+
 
         # Drop the targets for balancing
         cols2drop = [col for col in self.targets_for_balancing if col not in self.original_targets]
@@ -394,14 +388,26 @@ class GloballyBalancedSplit:
 
             return mapping
 
-    def _compute_min_interset_distance(self, df):
+    def _compute_min_interset_Tanimoto_distances(
+            self, 
+            df, 
+            split_col = 'Split',
+            mTd_col = 'minInterSetTd',
+            fp_calculator = GetMorganGenerator(radius=3, fpSize=2048)
+            ):
         """
         Compute the minimum Tanimoto distance per compound to the compounds in the other subsets.
         
         Parameters
         ----------
-        data : pd.DataFrame
-            Dataframe containing the data with a column 'Split' containing the split
+        df : pd.DataFrame
+            Dataframe containing the data with a column 'Split' containing the subset number
+        split_col : str, optional
+            Name of the column containing the subset number, by default 'Split'
+        mTd_col : str, optional
+            Name of the column to store the minimum Tanimoto distance in, by default 'minInterSetTd'
+        fp_calculator : rdkit.Chem.rdMolDescriptors.GetMorganGenerator, optional
+            Fingerprint calculator, by default GetMorganGenerator(radius=3, nBits=2048)
         
         Returns
         -------
@@ -410,25 +416,25 @@ class GloballyBalancedSplit:
 
         """
 
-        # Compute Morgan Fingerprints
-        fp_calculator = GetMorganGenerator(radius=3, nBits=2048)
-        fps = [ fp_calculator.GetFingerprint(Chem.MolFromSmiles(smi)) for smi in df[self.smiles_column].tolist() ]
+        # Compute fingerprints
+        mols = [ Chem.MolFromSmiles(smi) for smi in df[self.smiles_column].tolist() ]
+        fps = [ fp_calculator.GetFingerprint(mol) for mol in mols ]
 
-        min_distances = np.zeros(n)
+        min_distances = np.zeros(len(fps))
         # Iterate over subsets and compute minimum Tanimoto distance per compound to the compounds in the other subsets
-        for j in df.Split.unique():
-            ref_idx = df[df.Split == j].index.tolist()
+        for j in df[split_col].unique():
+            ref_idx = df[df[split_col] == j].index.tolist()
             other_fps = [ fp for i, fp in enumerate(fps) if i not in ref_idx ]
             for i in ref_idx :
                 sims = DataStructs.BulkTanimotoSimilarity(fps[i], other_fps)
                 min_distances[i] = 1. - max(sims)
 
-        df['MinInterSetTd'] = min_distances
+        df[mTd_col] = min_distances
 
         # Print average and std  of minimum distances per subset
-        txt = 'Average and std of minimum Tanimoto distance per subset:'
-        for subset in sorted(df['Split'].unique()):
-            dist = df[df['Split'] == subset]['MinInterSetTd'].to_numpy()
+        txt = f'Average and std of minimum Tanimoto distance per subset ({split_col}):'
+        for subset in sorted(df[split_col].unique()):
+            dist = df[df[split_col] == subset][mTd_col].to_numpy()
             txt += f' {subset}: {np.mean(dist):.2f} ({np.std(dist):.2f})'
         print(txt)
 
