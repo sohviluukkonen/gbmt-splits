@@ -13,7 +13,7 @@ class TestSplits(TestCase):
 
     test_data_path = os.path.join(os.path.dirname(__file__), 'test_data.csv')
     seed = 2022
-    time_limit = 10
+    time_limit = None
 
     def test_random_split(self):
 

@@ -47,7 +47,7 @@ class GloballyBalancedSplit:
             n_splits : int = 1,
             equal_weight_perc_compounds_as_tasks : bool = True,
             relative_gap : float = 0.1,
-            time_limit_seconds : int = 60,
+            time_limit_seconds : int = None,
             n_jobs : int = 1,
             min_distance : bool = True,    
             ) -> None:     
@@ -146,7 +146,7 @@ class GloballyBalancedSplit:
                 self.sizes, 
                 self.equal_weight_perc_compounds_as_tasks, 
                 self.relative_gap,
-                self.time_limit_seconds,
+                self.time_limit_seconds if self.time_limit_seconds else self.get_default_time_limit_seconds(len(smiles_list), len(self.tasks_for_balancing)),
                 self.n_jobs)  
             for i, idx in clusters.items(): 
                 self.df.loc[idx, split_name] = merged_clusters_mapping[i]-1
@@ -175,6 +175,33 @@ class GloballyBalancedSplit:
         self.df.drop(cols2drop, axis=1, inplace=True)
 
         return self.df
+    
+    def get_default_time_limit_seconds(self, nmols : int, ntasks : int) -> int:
+        """
+        Default time limit in seconds for the optimization problem.
+
+        tlim = nmol^(1/3) * sqrt(ntask) and tlim >= 10s and tlim <= 1h
+
+        Parameters
+        ----------
+        nmols : int
+            Number of molecules.
+        ntasks : int
+            Number of tasks.
+        
+        Returns
+        -------
+        int
+            Time limit in seconds.
+        """
+        
+        tmol = nmols ** (1/3)
+        ttarget = np.sqrt(ntasks)
+        tmin = 10
+        tmax = 60 * 60
+        tlim = min(tmax, max(tmin, tmol * ttarget)) 
+        print(f'Time limit (s): {tlim:.0f }')
+        return tlim
 
 
     def _compute_tasks_per_cluster(
