@@ -9,7 +9,7 @@ Three splits are available: random-, dissimilarity- (clustering based on Tanimot
 # Installation
 
 ```
-pip install git+ssh:git@github.com:sohviluukkonen/gbmt-splits.git
+pip install git+https://git@github.com/sohviluukkonen/gbmt-splits.git@main
 ```
 
 # Getting started
