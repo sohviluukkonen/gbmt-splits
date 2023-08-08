@@ -200,7 +200,7 @@ class GloballyBalancedSplit:
         tmin = 10
         tmax = 60 * 60
         tlim = min(tmax, max(tmin, tmol * ttarget)) 
-        print(f'Time limit (s): {tlim:.0f }')
+        print(f'Time limit: {int(tlim)}s')
         return tlim
 
 
