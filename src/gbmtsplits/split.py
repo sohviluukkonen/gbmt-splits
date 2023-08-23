@@ -11,6 +11,7 @@ from rdkit import Chem, DataStructs
 from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
 
 from .clustering import MaxMinClustering, LeaderPickerClustering, MurckoScaffoldClustering, RandomClustering
+from .logs import logger
 
 class GloballyBalancedSplit:
 
@@ -125,18 +126,18 @@ class GloballyBalancedSplit:
 
             txt = f' {split_name} '
             n = int((80 - len(txt)) / 2)
-            print('=' * n + txt + '=' * n)
-            print(f'Clustering method: {self.clustering_method.get_name() if self.clustering_method else "precomputed clusters"}')
-            print(f'Original tasks: {self.original_tasks}')
-            print(f'Tasks for balancing: {self.tasks_for_balancing}')
-            print(f'Subset sizes: {self.sizes}')
+            logger.info('=' * n + txt + '=' * n)
+            logger.info(f'Clustering method: {self.clustering_method.get_name() if self.clustering_method else "precomputed clusters"}')
+            logger.info(f'Original tasks: {self.original_tasks}')
+            logger.info(f'Tasks for balancing: {self.tasks_for_balancing}')
+            logger.info(f'Subset sizes: {self.sizes}')
 
             # Cluster molecules
             if self.clusters :
                 clusters = self.clusters
             else:
                 clusters = self.clustering_method(smiles_list)
-            print(f'Number of initial clusters: {len(clusters)}')
+            logger.info(f'Number of initial clusters: {len(clusters)}')
             # Compute the number of self.dfpoints per task for each cluster
             tasks_per_cluster = self._compute_tasks_per_cluster(self.tasks_for_balancing, clusters)
             
@@ -200,7 +201,7 @@ class GloballyBalancedSplit:
         tmin = 10
         tmax = 60 * 60
         tlim = min(tmax, max(tmin, tmol * ttarget)) 
-        print(f'Time limit: {int(tlim)}s')
+        logger.info(f'Time limit: {int(tlim)}s')
         return tlim
 
 
@@ -444,7 +445,7 @@ class GloballyBalancedSplit:
         # Print header
         txt = f' Min. inter-set Tanimoto distance '
         n = int((80 - len(txt)) / 2)
-        print('-' * n + txt + '-' * n) 
+        logger.info('-' * n + txt + '-' * n) 
 
         # Compute fingerprints
         mols = [ Chem.MolFromSmiles(smi) for smi in self.df[self.smiles_column].tolist() ]
@@ -465,11 +466,11 @@ class GloballyBalancedSplit:
         # Print average and std  of minimum distances per subset
         for subset in sorted(self.df[split_col].unique()):
             dist = self.df[self.df[split_col] == subset][mTd_col] #.to_numpy()
-            print(f'Subset {int(subset)}: {dist.mean():.2f} +/- {dist.std():.2f} | {dist.median():.2f}')
+            logger.info(f'Subset {int(subset)}: {dist.mean():.2f} +/- {dist.std():.2f} | {dist.median():.2f}')
 
         # Chemical dissimilarity score
         cd_score = self.df.groupby(split_col)[mTd_col].median().min()
-        print(f'Chemical dissimilarity score: {cd_score:.2f}')
+        logger.info(f'Chemical dissimilarity score: {cd_score:.2f}')
     
     def _compute_task_balace(self, split_col : str = 'Split'):
 
@@ -485,7 +486,7 @@ class GloballyBalancedSplit:
         # Header
         txt = f' {split_col} balance '
         n = int((80 - len(txt)) / 2)
-        print('-' * n + txt + '-' * n) 
+        logger.info('-' * n + txt + '-' * n) 
 
         # Get name of longets task
         longest_task = max(self.tasks_for_balancing, key=len)   
@@ -499,7 +500,7 @@ class GloballyBalancedSplit:
             for subset in sorted(self.df[split_col].unique()):
                 n_subset = counts.loc[subset, task]
                 txt += f' {int(subset)}: {n_subset/n:.2f}\t'
-            print(txt)
+            logger.info(txt)
         
         # Overall balance
         txt = f'Overall balance:' + ' ' * (len(longest_task) - len(task)) + '\t'
@@ -510,5 +511,5 @@ class GloballyBalancedSplit:
             n_subset = counts.loc[subset]
             txt += f' {int(subset)}: {n_subset/n:.2f}\t'
             balance_score += np.abs(n_subset/n - self.sizes[i])
-        print(txt)
-        print(f'Balance score: {balance_score/len(self.sizes):.4f}')
+        logger.info(txt)
+        logger.info(f'Balance score: {balance_score/len(self.sizes):.4f}')

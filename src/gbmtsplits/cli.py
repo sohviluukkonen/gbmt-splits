@@ -1,6 +1,8 @@
+import os
 import argparse
 import pandas as pd
 from timeit import default_timer as timer
+from .logs.config import enable_logging
 from .split import GloballyBalancedSplit
 from .clustering import RandomClustering, LeaderPickerClustering, MaxMinClustering, MurckoScaffoldClustering
 
@@ -44,8 +46,8 @@ def main():
     # Start the timer
     start_time = timer()
     
+    # Parse arguments 
     args = parser.parse_args()
-    
     # Read input data from csv/tsv file ##########################
     if '.csv' in args.input:
         df = pd.read_csv(args.input)
@@ -61,6 +63,18 @@ def main():
 
     if not args.output:
         args.output = args.input.split('.')[0] 
+
+    # Enable logging #############################################
+    logSettings = enable_file_logger(
+        os.path.dirname(args.output),
+        "gbmtsplits.log",
+        False,
+        __name__,
+        vars(args),
+        disable_existing_loggers=False,
+    )
+    log = logSettings.log
+    
 
     # Setup splitter #############################################
     if args.clustering == 'random':
@@ -101,7 +115,7 @@ def main():
     
     # Print elapsed time #########################################
     elapsed_time = timer() - start_time
-    print('Elapsed time: {:.2f} seconds'.format(elapsed_time))
+    log.info('Elapsed time: {:.2f} seconds'.format(elapsed_time))
         
 if __name__ == '__main__':
 
