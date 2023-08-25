@@ -72,8 +72,9 @@ class GloballyBalancedSplit:
             self,
             data : pd.DataFrame,
             smiles_column : str = 'SMILES',
-            tasks : List[str] = None,
-            ignore_columns : List[str] = None,
+            tasks : list[str] = None,
+            ignore_columns : list[str] = None,
+            preassigned_smiles : dict[str, int] = None,
             ) -> pd.DataFrame:
         
         """
@@ -108,6 +109,7 @@ class GloballyBalancedSplit:
         self.df = data.copy()
         self.smiles_column = smiles_column
         self.ignore_columns = ignore_columns
+        self.preassigned_smiles = preassigned_smiles
         
         # Save the original tasks and create the tasks for balancing
         self._set_original_tasks(tasks)
@@ -136,10 +138,14 @@ class GloballyBalancedSplit:
             if self.clusters :
                 clusters = self.clusters
             else:
-                clusters = self.clustering_method(smiles_list)
+                clusters = self.clustering_method(smiles_list, )
             logger.info(f'Number of initial clusters: {len(clusters)}')
+            
+            # Get clusters indices of pre-assigned molecules
+            preassigned_clusters = self._get_preassigned_clusters(clusters) if preassigned_smiles else None
             # Compute the number of self.dfpoints per task for each cluster
             tasks_per_cluster = self._compute_tasks_per_cluster(self.tasks_for_balancing, clusters)
+
             
             # Merge the clusters with a linear programming method to create the subsets
             merged_clusters_mapping = self._merge_clusters_with_balancing_mapping(
@@ -148,7 +154,8 @@ class GloballyBalancedSplit:
                 self.equal_weight_perc_compounds_as_tasks, 
                 self.relative_gap,
                 self.time_limit_seconds if self.time_limit_seconds else self.get_default_time_limit_seconds(len(smiles_list), len(self.tasks_for_balancing)),
-                self.n_jobs)  
+                self.n_jobs,
+                preassigned_clusters)  
             for i, idx in clusters.items(): 
                 self.df.loc[idx, split_name] = merged_clusters_mapping[i]-1
 
@@ -285,14 +292,48 @@ class GloballyBalancedSplit:
             else:
                 self.tasks_for_balancing.append(task)
 
+    def _get_preassigned_clusters(
+            self, 
+            clusters : dict[int, list[int]]) -> dict[int, int]:
+
+        """
+        Get the pre-assigned clusters.
+
+        Parameters
+        ----------
+        clusters : dict[int, list[int]]
+            Dictionary of clusters and list of indices of molecules in the clusters.
+        
+        Returns
+        -------
+        dict[int, int]
+            Dictionary with cluster indices as keys and subset indices as values.
+        """
+
+        preassigned_clusters = {}
+        for smi, subset in self.preassigned_smiles.items():
+            imol = self.df[self.df[self.smiles_column] == smi].index[0]
+            for idx, cluster in clusters.items():
+                if imol in cluster:
+                    if (idx in preassigned_clusters.keys()) and (subset != preassigned_clusters[idx]):
+                        raise ValueError(f'Pre-assigned cluster {idx} is assigned to multiple subsets.')
+                    preassigned_clusters[idx] = subset
+                    logger.info(f'Cluster {idx} contaning {smi} is preassigned to subset {subset}.')
+                    break
+
+        preassigned_clusters
+        
+        return preassigned_clusters
+
     def _merge_clusters_with_balancing_mapping(
             self, 
             tasks_vs_clusters_array : np.array,
-            sizes : List[float] = [0.9, 0.1, 0.1], 
+            sizes : list[float] = [0.9, 0.1, 0.1], 
             equal_weight_perc_compounds_as_tasks : bool = False,
             relative_gap : float = 0,
             time_limit_seconds : int = 60*60,
-            max_N_threads : int = 1) -> List[List[int]]:
+            max_N_threads : int = 1,
+            preassigned_clusters : dict[int, int] | None = None) -> list[list[int]]:
             """
             Linear programming function needed to balance the self.df while merging clusters.
 
@@ -326,6 +367,9 @@ class GloballyBalancedSplit:
             max_N_threads : int
                 - the maximal number of threads to be used by the solver.
                 - it is advisable to set this number as high as allowed by the available resources.
+            preassigned_clusters : dict
+                - a dictionary of the form {cluster_index: ML_subset_index} to force the clusters to be assigned
+                    to the ML subsets as specified by the user.
             
             Returns
             ------
@@ -401,6 +445,13 @@ class GloballyBalancedSplit:
             # Constraints forcing each cluster to be in one and only one ML_subset
             for c in range(N):
                 prob += LpAffineExpression([(x[c+m*N],+1) for m in range(S)]) == 1
+
+            # If preassigned_clusters is pro[int, int]vided, add the constraints to the model to force the clusters
+            # to be assigned to the ML subset preassigned_clusters[t]
+            if preassigned_clusters:
+                for c, subset in preassigned_clusters.items():
+                    # prob += LpAffineExpression(x[c+(subset)*N]) == 1
+                    prob += x[c+(subset)*N] == 1
 
             # Constraints related to the ABS values handling, part 1 and 2
             for m in range(S):
