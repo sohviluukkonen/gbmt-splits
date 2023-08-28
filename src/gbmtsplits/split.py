@@ -50,7 +50,9 @@ class GloballyBalancedSplit:
             relative_gap : float = 0.1,
             time_limit_seconds : int = None,
             n_jobs : int = 1,
-            min_distance : bool = True,    
+            min_distance : bool = True,  
+            stratify : bool = True,
+            stratify_reg_nbins : int = 5,  
             ) -> None:     
         
         if clusters is None and clustering_method is None:
@@ -67,6 +69,8 @@ class GloballyBalancedSplit:
         self.time_limit_seconds = time_limit_seconds
         self.n_jobs = n_jobs
         self.min_distance = min_distance
+        self.stratify = stratify
+        self.stratify_reg_nbins = stratify_reg_nbins
 
     def __call__(
             self,
@@ -277,20 +281,35 @@ class GloballyBalancedSplit:
     def _set_tasks_for_balancing(self) -> None:
 
         """
-        Set the tasks for balancing. If all values for a task are integers, 
-        the task is considered a classification task, and a separate column is
-        created for each class. If the task is not a classification task,
-        the task is considered a regression task, and the task is used as is.
+        Set the tasks for balancing. 
+
+        If stratify is True, the tasks are used to create a column for each class (in case of classification tasks) and
+        bin the data (in case of regression tasks). If stratify is False, the tasks are used as is.
         """
 
         self.tasks_for_balancing = []
-        for task in self.original_tasks:
-            if all( x % 1 == 0 for x in self.df[task].dropna()):
-                for cls in self.df[task].dropna().unique():
-                    self.df[task + '_' + str(cls)] = (self.df[task] == cls).map({True: 1, False: np.nan})
-                    self.tasks_for_balancing.append(f'{task}_{cls}')
-            else:
-                self.tasks_for_balancing.append(task)
+        if self.stratify:
+            for task in self.original_tasks:
+                # Classification: task per class
+                if all( x % 1 == 0 for x in self.df[task].dropna()):
+                    for cls in self.df[task].dropna().unique():
+                        key = f'{task}_{int(cls)}'
+                        self.df[key] = (self.df[task] == cls).map({True: 1, False: np.nan})
+                        self.tasks_for_balancing.append(key)
+                    logger.info(f'Classification task {task} stratified into {len(self.df[task].dropna().unique())} tasks.')
+                # Regression: bin data and use as tasks
+                else:
+                    ymin, ymax = self.df[task].min(), self.df[task].max()
+                    bins = np.linspace(ymin, ymax, self.stratify_reg_nbins + 1)
+                    for i in range(len(bins)-1):
+                        key = f'{task}_{bins[i]:.2f}_{bins[i+1]:.2f}'
+                        self.df[key] = ((self.df[task] >= bins[i]) & (self.df[task] < bins[i+1])).map({True: 1, False: np.nan})
+                        self.tasks_for_balancing.append(key)
+                    logger.info(f'Regression task {task} stratified into {len(bins)-1} tasks.')
+
+                    # self.tasks_for_balancing.append(task)
+        else:
+            self.tasks_for_balancing = self.original_tasks
 
     def _get_preassigned_clusters(
             self, 
@@ -539,28 +558,72 @@ class GloballyBalancedSplit:
         n = int((80 - len(txt)) / 2)
         logger.info('-' * n + txt + '-' * n) 
 
+
+        # 1. Print out for each balancing task the fraction and number of self.df points per subset
+        # 2. Print out for each original task the fraction and number of self.df points per subset
+        # 3. Print the fraction and number of self.df point per subset for all tasks combined
+
         # Get name of longets task
         longest_task = max(self.tasks_for_balancing, key=len)   
 
-        # Subset balance per task
-        for task in self.tasks_for_balancing:
+        # 1. Print out for each balancing task the fraction and number of self.df points per subset
+        if self.stratify:
+            for task in self.tasks_for_balancing:
+                txt = f'{task} balance:'
+                txt += ' ' * (len(longest_task) - len(task)) + '\t'
+                counts = self.df[[task, split_col]].groupby(split_col).count()
+                n = counts[task].sum()
+                for subset in sorted(self.df[split_col].unique()):
+                    n_subset = counts.loc[subset, task]
+                    txt += f' {int(subset)}: {n_subset/n:.2f} [{n_subset}]\t'
+                logger.info(txt)
+            logger.info('')
+
+        # 2. Print out for each original task the fraction and number of self.df points per subset
+        for task in self.original_tasks:
             txt = f'{task} balance:'
             txt += ' ' * (len(longest_task) - len(task)) + '\t'
             counts = self.df[[task, split_col]].groupby(split_col).count()
             n = counts[task].sum()
             for subset in sorted(self.df[split_col].unique()):
                 n_subset = counts.loc[subset, task]
-                txt += f' {int(subset)}: {n_subset/n:.2f}\t'
+                txt += f' {int(subset)}: {n_subset/n:.2f} [{n_subset}]\t'
             logger.info(txt)
-        
-        # Overall balance
+        logger.info('')
+
+        # 3. Print the fraction and number of self.df point per subset for all tasks combined
         txt = f'Overall balance:' + ' ' * (len(longest_task) - len(task)) + '\t'
-        counts = self.df[self.tasks_for_balancing].sum(axis=1).groupby(self.df[split_col]).sum()
-        n = counts.sum()
+        n = self.df.shape[0]
         balance_score = 0
-        for i, subset in enumerate(sorted(self.df[split_col].unique())):
-            n_subset = counts.loc[subset]
-            txt += f' {int(subset)}: {n_subset/n:.2f}\t'
+        subsets = sorted(self.df[split_col].unique())
+        for i, subset in enumerate(subsets):
+            n_subset = self.df[self.df[split_col] == subset].shape[0]
+            txt += f' {int(subset)}: {n_subset/n:.2f} [{n_subset}]\t'
             balance_score += np.abs(n_subset/n - self.sizes[i])
         logger.info(txt)
         logger.info(f'Balance score: {balance_score/len(self.sizes):.4f}')
+
+
+
+        # # Subset balance per task
+        # for task in self.tasks_for_balancing:
+        #     txt = f'{task} balance:'
+        #     txt += ' ' * (len(longest_task) - len(task)) + '\t'
+        #     counts = self.df[[task, split_col]].groupby(split_col).count()
+        #     n = counts[task].sum()
+        #     for subset in sorted(self.df[split_col].unique()):
+        #         n_subset = counts.loc[subset, task]
+        #         txt += f' {int(subset)}: {n_subset/n:.2f}\t'
+        #     logger.info(txt)
+        
+        # # Overall balance
+        # txt = f'Overall balance:' + ' ' * (len(longest_task) - len(task)) + '\t'
+        # counts = self.df[self.tasks_for_balancing].sum(axis=1).groupby(self.df[split_col]).sum()
+        # n = counts.sum()
+        # balance_score = 0
+        # for i, subset in enumerate(sorted(self.df[split_col].unique())):
+        #     n_subset = counts.loc[subset]
+        #     txt += f' {int(subset)}: {n_subset/n:.2f}\t'
+        #     balance_score += np.abs(n_subset/n - self.sizes[i])
+        # logger.info(txt)
+        # logger.info(f'Balance score: {balance_score/len(self.sizes):.4f}')
