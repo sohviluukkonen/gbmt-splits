@@ -4,6 +4,8 @@ import pandas as pd
 from unittest import TestCase
 from parameterized import parameterized
 
+import logging
+
 from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
 
 from .split import GloballyBalancedSplit
@@ -13,6 +15,9 @@ preassigned_smiles = {
     'Brc1cccc(Nc2nc3c(N4CCCC4)ncnc3s2)c1' : 0,
     'C#CCn1c(=O)c2c(nc3n2CCCN3C2CCC2)n(C)c1=O' : 1,
 }
+
+logging.basicConfig(level=logging.DEBUG)
+
 
 class TestSplits(TestCase):
 
