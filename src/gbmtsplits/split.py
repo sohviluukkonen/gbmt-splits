@@ -1,11 +1,9 @@
-import tqdm
 
 import numpy as np
 import pandas as pd
 
 from pulp import *
-from typing import List, Dict, Callable
-from abc import ABC, abstractmethod
+from typing import Callable
 
 from rdkit import Chem, DataStructs
 from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
@@ -20,10 +18,10 @@ class GloballyBalancedSplit:
 
     Attributes
     ----------
-    sizes : List[int], optional
-        List of sizes of the splits.
+    sizes : list[int], optional
+        list of sizes of the splits.
     clusters : dict, optional
-        Dictionary of clusters, where keys are cluster indices and values are indices of molecules.
+        dictionary of clusters, where keys are cluster indices and values are indices of molecules.
     clustering_method : Callable, optional
         Clustering method.
     n_splits : int, optional
@@ -42,7 +40,7 @@ class GloballyBalancedSplit:
 
     def __init__(
             self,
-            sizes : List[int] = [0.8, 0.1, 0.1],
+            sizes : list[int] = [0.8, 0.1, 0.1],
             clusters : dict = None,
             clustering_method : Callable | None = MaxMinClustering(),
             n_splits : int = 1,
@@ -90,10 +88,10 @@ class GloballyBalancedSplit:
             Dataframe with SMILES strings and tasks.
         smiles_column : str, optional
             Name of the column with SMILES strings.
-        tasks : List[str], optional
-            List of task columns.
-        ignore_columns : List[str], optional
-            List of columns to ignore.
+        tasks : list[str], optional
+            list of task columns.
+        ignore_columns : list[str], optional
+            list of columns to ignore.
         
         Returns
         -------
@@ -186,6 +184,9 @@ class GloballyBalancedSplit:
         cols2drop = [col for col in self.tasks_for_balancing if col not in self.original_tasks]
         self.df.drop(cols2drop, axis=1, inplace=True)
 
+
+        logger.info('=' * 80)
+
         return self.df
     
     def get_default_time_limit_seconds(self, nmols : int, ntasks : int) -> int:
@@ -218,19 +219,19 @@ class GloballyBalancedSplit:
 
     def _compute_tasks_per_cluster(
             self, 
-            tasks : List[str],
-            clusters : Dict[int, List[int]]
-        ) -> Dict[int, List[str]]:
+            tasks : list[str],
+            clusters : dict[int, list[int]]
+        ) -> dict[int, list[str]]:
         
         """
         Compute the number of datapoints per task for each cluster.
 
         Parameters
         ----------
-        tasks : List[str]
-            List of tasks
-        clusters : Dict[int, List[int]]
-            Dictionary of clusters and list of indices of molecules in the cluster
+        tasks : list[str]
+            list of tasks
+        clusters : dict[int, list[int]]
+            dictionary of clusters and list of indices of molecules in the cluster
 
         Returns
         -------
@@ -253,14 +254,14 @@ class GloballyBalancedSplit:
     # conda env remove --name myenv
 
         
-    def _set_original_tasks(self, tasks : List[str] | None) -> None:
+    def _set_original_tasks(self, tasks : list[str] | None) -> None:
         """
         Set the original tasks.
         
         Parameters
         ----------
-        tasks : List[str] | None
-            List of task columns.
+        tasks : list[str] | None
+            list of task columns.
         """
 
         if tasks is None:
@@ -287,25 +288,47 @@ class GloballyBalancedSplit:
         bin the data (in case of regression tasks). If stratify is False, the tasks are used as is.
         """
 
+        def is_convertible(value):
+            try:
+                float(value)
+                return True
+            except ValueError:
+                return False
+
         self.tasks_for_balancing = []
         if self.stratify:
             for task in self.original_tasks:
+                values = self.df[task].dropna().unique()
+                values_is_numerical = [is_convertible(value) for value in values]
+                
+                # Check in non-convertible strings
+                if not (all(values_is_numerical)): # Some non numerical values
+
+                    if any(values_is_numerical): # But some values are numerical
+                        raise ValueError(f'Column {task} contains both numerical and strings values.')
+                    else:
+                        # Create a task per string
+                        for string in values:
+                            key = f'{task}_{string}'
+                            self.df[key] = (self.df[task] == string).map({True: 1, False: np.nan})
+                            self.tasks_for_balancing.append(key)
+                        logger.info(f'String classification {task} stratified into {len(self.df[task].dropna().unique())} tasks.')
                 # Classification: task per class
-                if all( x % 1 == 0 for x in self.df[task].dropna()):
-                    for cls in self.df[task].dropna().unique():
+                elif all( x % 1 == 0 for x in values):
+                    for cls in values:
                         key = f'{task}_{int(cls)}'
                         self.df[key] = (self.df[task] == cls).map({True: 1, False: np.nan})
                         self.tasks_for_balancing.append(key)
                     logger.info(f'Classification task {task} stratified into {len(self.df[task].dropna().unique())} tasks.')
                 # Regression: bin data and use as tasks
                 else:
-                    ymin, ymax = self.df[task].min(), self.df[task].max()
-                    bins = np.linspace(ymin, ymax, self.stratify_reg_nbins + 1)
-                    for i in range(len(bins)-1):
-                        key = f'{task}_{bins[i]:.2f}_{bins[i+1]:.2f}'
-                        self.df[key] = ((self.df[task] >= bins[i]) & (self.df[task] < bins[i+1])).map({True: 1, False: np.nan})
+                    _, bin_edges = np.histogram(values, bins=self.stratify_reg_nbins)
+                    for i in range(len(bin_edges)-1):
+                        key = f'{task}_{bin_edges[i]:.2f}_{bin_edges[i+1]:.2f}'
+                        self.df[key] = ((self.df[task] >= bin_edges[i]) & (self.df[task] < bin_edges[i+1])).map({True: 1, False: np.nan})
                         self.tasks_for_balancing.append(key)
-                    logger.info(f'Regression task {task} stratified into {len(bins)-1} tasks.')
+                    logger.info(f'Regression task {task} stratified into {len(bin_edges)-1} tasks.')
+
 
                     # self.tasks_for_balancing.append(task)
         else:
@@ -321,12 +344,12 @@ class GloballyBalancedSplit:
         Parameters
         ----------
         clusters : dict[int, list[int]]
-            Dictionary of clusters and list of indices of molecules in the clusters.
+            dictionary of clusters and list of indices of molecules in the clusters.
         
         Returns
         -------
         dict[int, int]
-            Dictionary with cluster indices as keys and subset indices as values.
+            dictionary with cluster indices as keys and subset indices as values.
         """
 
         preassigned_clusters = {}
@@ -392,7 +415,7 @@ class GloballyBalancedSplit:
             
             Returns
             ------
-            List (of length equal to the number of columns of tasks_vs_clusters_array) of final cluster identifiers
+            list (of length equal to the number of columns of tasks_vs_clusters_array) of final cluster identifiers
                 (integers, numbered from 1 to len(sizes)), mapping each unique initial cluster to its final cluster.
             Example: if sizes == [20, 10, 70], the output will be a list like [3, 3, 1, 2, 1, 3...], where
                 '1' represents the final cluster of relative size 20, '2' the one of relative size 10, and '3' the 
@@ -602,28 +625,3 @@ class GloballyBalancedSplit:
             balance_score += np.abs(n_subset/n - self.sizes[i])
         logger.info(txt)
         logger.info(f'Balance score: {balance_score/len(self.sizes):.4f}')
-
-
-
-        # # Subset balance per task
-        # for task in self.tasks_for_balancing:
-        #     txt = f'{task} balance:'
-        #     txt += ' ' * (len(longest_task) - len(task)) + '\t'
-        #     counts = self.df[[task, split_col]].groupby(split_col).count()
-        #     n = counts[task].sum()
-        #     for subset in sorted(self.df[split_col].unique()):
-        #         n_subset = counts.loc[subset, task]
-        #         txt += f' {int(subset)}: {n_subset/n:.2f}\t'
-        #     logger.info(txt)
-        
-        # # Overall balance
-        # txt = f'Overall balance:' + ' ' * (len(longest_task) - len(task)) + '\t'
-        # counts = self.df[self.tasks_for_balancing].sum(axis=1).groupby(self.df[split_col]).sum()
-        # n = counts.sum()
-        # balance_score = 0
-        # for i, subset in enumerate(sorted(self.df[split_col].unique())):
-        #     n_subset = counts.loc[subset]
-        #     txt += f' {int(subset)}: {n_subset/n:.2f}\t'
-        #     balance_score += np.abs(n_subset/n - self.sizes[i])
-        # logger.info(txt)
-        # logger.info(f'Balance score: {balance_score/len(self.sizes):.4f}')

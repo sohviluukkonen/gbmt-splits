@@ -30,7 +30,7 @@ class ClusteringMethod(ABC):
         return self.__class__.__name__
 
     def _set_n_clusters(self, N : int) -> None:
-        self.n_clusters = self.n_clusters if self.n_clusters is not None else N // 100
+        self.n_clusters = self.n_clusters if self.n_clusters is not None else N // 10 
 
 
 

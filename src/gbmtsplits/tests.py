@@ -23,7 +23,7 @@ class TestSplits(TestCase):
 
     test_data_path = os.path.join(os.path.dirname(__file__), 'test_data.csv')
     seed = 2022
-    time_limit = None
+    time_limit = 10
 
     @parameterized.expand([
         ([0.9, 0.1], None,), 
@@ -59,7 +59,7 @@ class TestSplits(TestCase):
             
         data = pd.read_csv(self.test_data_path)
         ncols = data.shape[1]
-        clustering = MaxMinClustering(seed=self.seed, n_clusters=10)
+        clustering = MaxMinClustering(seed=self.seed)
         splitter = GloballyBalancedSplit(
             sizes = sizes, 
             clustering_method = clustering,
