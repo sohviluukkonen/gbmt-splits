@@ -117,6 +117,7 @@ class GloballyBalancedSplit:
         self._set_original_tasks(tasks)
         self._set_tasks_for_balancing()
 
+
         smiles_list = self.df[smiles_column].tolist()
 
         for split in range(self.n_splits):
@@ -147,6 +148,8 @@ class GloballyBalancedSplit:
             preassigned_clusters = self._get_preassigned_clusters(clusters) if preassigned_smiles else None
             # Compute the number of self.dfpoints per task for each cluster
             tasks_per_cluster = self._compute_tasks_per_cluster(self.tasks_for_balancing, clusters)
+
+            print(tasks_per_cluster, tasks_per_cluster.shape)
 
             
             # Merge the clusters with a linear programming method to create the subsets
@@ -322,12 +325,16 @@ class GloballyBalancedSplit:
                     logger.info(f'Classification task {task} stratified into {len(self.df[task].dropna().unique())} tasks.')
                 # Regression: bin data and use as tasks
                 else:
-                    _, bin_edges = np.histogram(values, bins=self.stratify_reg_nbins)
-                    for i in range(len(bin_edges)-1):
-                        key = f'{task}_{bin_edges[i]:.2f}_{bin_edges[i+1]:.2f}'
-                        self.df[key] = ((self.df[task] >= bin_edges[i]) & (self.df[task] < bin_edges[i+1])).map({True: 1, False: np.nan})
+                    bin_size = len(values) // self.stratify_reg_nbins
+                    sorted_values = np.sort(values)
+                    bins = [sorted_values[i:i + bin_size] for i in range(0, len(sorted_values), bin_size)]
+                    for i, bin in enumerate(bins):
+                        key = f'{task}_{bin[0]:.2f}_{bin[-1]:.2f}'
+                        self.df[key] = self.df[task].apply(lambda x: x if x in bin else np.nan)
                         self.tasks_for_balancing.append(key)
-                    logger.info(f'Regression task {task} stratified into {len(bin_edges)-1} tasks.')
+                    logger.info(f'Regression task {task} stratified into {self.stratify_reg_nbins} tasks.')
+
+
 
 
                     # self.tasks_for_balancing.append(task)
