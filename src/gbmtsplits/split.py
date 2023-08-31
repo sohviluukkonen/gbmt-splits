@@ -148,10 +148,7 @@ class GloballyBalancedSplit:
             preassigned_clusters = self._get_preassigned_clusters(clusters) if preassigned_smiles else None
             # Compute the number of self.dfpoints per task for each cluster
             tasks_per_cluster = self._compute_tasks_per_cluster(self.tasks_for_balancing, clusters)
-
-            print(tasks_per_cluster, tasks_per_cluster.shape)
-
-            
+                     
             # Merge the clusters with a linear programming method to create the subsets
             merged_clusters_mapping = self._merge_clusters_with_balancing_mapping(
                 tasks_per_cluster, 
@@ -161,6 +158,7 @@ class GloballyBalancedSplit:
                 self.time_limit_seconds if self.time_limit_seconds else self.get_default_time_limit_seconds(len(smiles_list), len(self.tasks_for_balancing)),
                 self.n_jobs,
                 preassigned_clusters)  
+
             for i, idx in clusters.items(): 
                 self.df.loc[idx, split_name] = merged_clusters_mapping[i]-1
 
