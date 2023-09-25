@@ -465,6 +465,12 @@ class GloballyBalancedSplit:
             # Create WML
             sk_harmonic = (1 / fractional_sizes) / np.sum(1 / fractional_sizes)
 
+            # Round all values to have only 3 decimals > reduce computational time
+            A = np.round(A, 3)
+            fractional_sizes = np.round(fractional_sizes, 3)
+            obj_weights = np.round(obj_weights, 3)
+            sk_harmonic = np.round(sk_harmonic, 3)           
+
             # Create the pulp model
             prob = LpProblem("Data_balancing", LpMinimize)
 
