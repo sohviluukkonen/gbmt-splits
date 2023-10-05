@@ -302,7 +302,7 @@ class GloballyBalancedSplit:
                 values = self.df[task].dropna().unique()
                 values_is_numerical = [is_convertible(value) for value in values]
                 
-                # Check in non-convertible strings
+                # Check if contains non-convertible strings
                 if not (all(values_is_numerical)): # Some non numerical values
 
                     if any(values_is_numerical): # But some values are numerical
