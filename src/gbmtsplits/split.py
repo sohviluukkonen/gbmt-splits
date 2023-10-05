@@ -323,19 +323,13 @@ class GloballyBalancedSplit:
                     logger.info(f'Classification task {task} stratified into {len(self.df[task].dropna().unique())} tasks.')
                 # Regression: bin data and use as tasks
                 else:
-                    bin_size = len(values) // self.stratify_reg_nbins
                     sorted_values = np.sort(values)
-                    bins = [sorted_values[i:i + bin_size] for i in range(0, len(sorted_values), bin_size)]
+                    bins = np.array_split(sorted_values, self.stratify_reg_nbins)
                     for i, bin in enumerate(bins):
                         key = f'{task}_{bin[0]:.2f}_{bin[-1]:.2f}'
                         self.df[key] = self.df[task].apply(lambda x: x if x in bin else np.nan)
                         self.tasks_for_balancing.append(key)
                     logger.info(f'Regression task {task} stratified into {self.stratify_reg_nbins} tasks.')
-
-
-
-
-                    # self.tasks_for_balancing.append(task)
         else:
             self.tasks_for_balancing = self.original_tasks
 
