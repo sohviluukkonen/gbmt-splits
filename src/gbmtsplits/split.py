@@ -250,10 +250,6 @@ class GloballyBalancedSplit:
                 task_vs_clusters[i+1,j] = self.df_per_cluster[task].dropna().shape[0]
 
         return task_vs_clusters  
-    
-    # Bash command to delete conda environment
-    # conda env remove --name myenv
-
         
     def _set_original_tasks(self, tasks : list[str] | None) -> None:
         """
