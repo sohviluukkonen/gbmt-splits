@@ -28,8 +28,8 @@ class GloballyBalancedSplit:
         Number of splits.
     equal_weight_perc_compounds_as_tasks : bool, optional
         Whether to weight the tasks equally or not.
-    relative_gap : float, optional  
-        Relative gap for the linear programming problem.
+    absolute_gap : float, optional  
+        Absolute gap between the absolute optimal objective and the current one at which the solver stops and returns a solution.
     time_limit_seconds : int, optional
         Time limit for the linear programming problem.
     n_jobs : int, optional
@@ -45,7 +45,7 @@ class GloballyBalancedSplit:
             clustering_method : Callable | None = MaxMinClustering(),
             n_splits : int = 1,
             equal_weight_perc_compounds_as_tasks : bool = True,
-            relative_gap : float = 0.1,
+            absolute_gap : float = 1e-3,
             time_limit_seconds : int = None,
             n_jobs : int = 1,
             min_distance : bool = True,  
@@ -63,7 +63,7 @@ class GloballyBalancedSplit:
         self.clustering_method = clustering_method
         self.n_splits = n_splits
         self.equal_weight_perc_compounds_as_tasks = equal_weight_perc_compounds_as_tasks
-        self.relative_gap = relative_gap
+        self.absolute_gap = absolute_gap
         self.time_limit_seconds = time_limit_seconds
         self.n_jobs = n_jobs
         self.min_distance = min_distance
@@ -154,7 +154,7 @@ class GloballyBalancedSplit:
                 tasks_per_cluster, 
                 self.sizes, 
                 self.equal_weight_perc_compounds_as_tasks, 
-                self.relative_gap,
+                self.absolute_gap,
                 self.time_limit_seconds if self.time_limit_seconds else self.get_default_time_limit_seconds(len(smiles_list), len(self.tasks_for_balancing)),
                 self.n_jobs,
                 preassigned_clusters)  

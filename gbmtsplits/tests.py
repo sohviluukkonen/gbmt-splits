@@ -113,7 +113,8 @@ class TestSplits(TestCase):
         splitter = GloballyBalancedSplit(
             clustering_method = clustering,
             time_limit_seconds=self.time_limit,
-            n_splits=3
+            n_splits=3,
+            absolute_gap = 1e-3,
         )
         data = splitter(data)
 
