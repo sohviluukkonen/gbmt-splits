@@ -298,7 +298,7 @@ class GloballyBalancedSplit:
                 values = self.df[task].dropna().unique()
                 values_is_numerical = [is_convertible(value) for value in values]
                 
-                # Check in non-convertible strings
+                # Check if contains non-convertible strings
                 if not (all(values_is_numerical)): # Some non numerical values
 
                     if any(values_is_numerical): # But some values are numerical
@@ -319,19 +319,13 @@ class GloballyBalancedSplit:
                     logger.info(f'Classification task {task} stratified into {len(self.df[task].dropna().unique())} tasks.')
                 # Regression: bin data and use as tasks
                 else:
-                    bin_size = len(values) // self.stratify_reg_nbins
                     sorted_values = np.sort(values)
-                    bins = [sorted_values[i:i + bin_size] for i in range(0, len(sorted_values), bin_size)]
+                    bins = np.array_split(sorted_values, self.stratify_reg_nbins)
                     for i, bin in enumerate(bins):
                         key = f'{task}_{bin[0]:.2f}_{bin[-1]:.2f}'
                         self.df[key] = self.df[task].apply(lambda x: x if x in bin else np.nan)
                         self.tasks_for_balancing.append(key)
                     logger.info(f'Regression task {task} stratified into {self.stratify_reg_nbins} tasks.')
-
-
-
-
-                    # self.tasks_for_balancing.append(task)
         else:
             self.tasks_for_balancing = self.original_tasks
 
@@ -373,7 +367,7 @@ class GloballyBalancedSplit:
             tasks_vs_clusters_array : np.array,
             sizes : list[float] = [0.9, 0.1, 0.1], 
             equal_weight_perc_compounds_as_tasks : bool = False,
-            relative_gap : float = 0,
+            absolute_gap : float = 1e-3,
             time_limit_seconds : int = 60*60,
             max_N_threads : int = 1,
             preassigned_clusters : dict[int, int] | None = None) -> list[list[int]]:
@@ -399,11 +393,10 @@ class GloballyBalancedSplit:
             equal_weight_perc_compounds_as_tasks : bool
                 - if True, matching the % records will have the same weight as matching the % self.df of individual tasks.
                 - if False, matching the % records will have a weight X times larger than the X tasks.
-            relative_gap : float
-                - the relative gap between the absolute optimal objective and the current one at which the solver
+            absolute_gap : float
+                - the absolute gap between the absolute optimal objective and the current one at which the solver
                 stops and returns a solution. Can be very useful for cases where the exact solution requires
                 far too long to be found to be of any practical use.
-                - set to 0 to obtain the absolute optimal solution (if reached within the time_limit_seconds)
             time_limit_seconds : int
                 - the time limit in seconds for the solver (by default set to 1 hour)
                 - after this time, whatever solution is available is returned
@@ -461,6 +454,12 @@ class GloballyBalancedSplit:
             # Create WML
             sk_harmonic = (1 / fractional_sizes) / np.sum(1 / fractional_sizes)
 
+            # Round all values to have only 3 decimals > reduce computational time
+            A = np.round(A, 3)
+            fractional_sizes = np.round(fractional_sizes, 3)
+            obj_weights = np.round(obj_weights, 3)
+            sk_harmonic = np.round(sk_harmonic, 3)           
+
             # Create the pulp model
             prob = LpProblem("Data_balancing", LpMinimize)
 
@@ -504,12 +503,9 @@ class GloballyBalancedSplit:
                     prob += LpAffineExpression([(x[c+m*N],A[t,c]) for c in cs]) + X[t] >= fractional_sizes[m]
 
             # Solve the model
-            prob.solve(PULP_CBC_CMD(gapRel = relative_gap, timeLimit = time_limit_seconds, threads = max_N_threads, msg=False))
-            #solver.tmpDir = "/zfsself.df/self.df/erik/erik-rp1/pQSAR/scaffoldsplit_trial/tmp"
-            #prob.solve(solver)
+            prob.solve(PULP_CBC_CMD(gapAbs = absolute_gap, timeLimit = time_limit_seconds, threads = max_N_threads, msg=False))
 
             # Extract the solution
-
             list_binary_solution = [value(x[i]) for i in range(N * S)]
             list_initial_cluster_indices = [(list(range(N)) * S)[i] for i,l in enumerate(list_binary_solution) if l == 1]
             list_final_ML_subsets = [(list((1 + np.repeat(range(S), N)).astype('int64')))[i] for i,l in enumerate(list_binary_solution) if l == 1]
