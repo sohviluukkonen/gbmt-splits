@@ -9,9 +9,8 @@ import logging
 
 from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
 
-from .split import GloballyBalancedSplit
 from .clustering import RandomClustering, MaxMinClustering, LeaderPickerClustering, MurckoScaffoldClustering
-from .splitters import GBMTSplitter
+from .splitters import *
 
 preassigned_smiles = {
     'Brc1cccc(Nc2nc3c(N4CCCC4)ncnc3s2)c1' : 0,
@@ -27,109 +26,80 @@ class TestSplits(TestCase):
     seed = 2022
     time_limit = 10
 
-    def test_gbmt_split(self):
-        df = pd.read_csv(self.test_data_path)
-        smiles_list = df['SMILES'].tolist()
-        y = df.drop(columns=['SMILES']).to_numpy()
-        X = np.zeros((y.shape[0], 1))
+    df = pd.read_csv(test_data_path)
+    smiles_list = df['SMILES'].tolist()
+    y = df.drop(columns=['SMILES']).to_numpy()
+    X = np.zeros((y.shape[0], 1))
 
-        splitter = GBMTSplitter()
-        split = splitter.split(X, y, smiles_list)
-        print(split)
-
-    # @parameterized.expand([
-    #     ([0.9, 0.1], None,), 
-    #     ([0.9, 0.1], preassigned_smiles,),
-    #     ])
-
-    # def test_random_split(self, sizes, preassigned_smiles):
-
-    #     data = pd.read_csv(self.test_data_path)
-    #     ncols = data.shape[1]
-    #     clustering = RandomClustering(seed=self.seed)
-    #     splitter = GloballyBalancedSplit(
-    #         sizes = sizes,
-    #         clustering_method = clustering,
-    #         time_limit_seconds=self.time_limit,
-    #     )
-    #     data = splitter(data, preassigned_smiles=preassigned_smiles)
-
-    #     assert data.shape[1] == ncols + 2
-    #     assert data.Split.nunique() == 2
-
-    #     if preassigned_smiles is not None:
-    #         for smiles, subset in preassigned_smiles.items():
-    #             assert data.loc[data['SMILES'] == smiles, 'Split'].values[0] == subset
-
-
-    # @parameterized.expand([
-    #     ([0.7, 0.1, 0.1, 0.1], None,), 
-    #     ([0.7, 0.1, 0.1, 0.1], preassigned_smiles,),
-    #     ])
+    @parameterized.expand([
+        ([0.8, 0.2], None, None), 
+        (None, 0.2, None,), # Use preassigned_smiles once it is implemented
+    ])  
     
-    # def test_dissimilarity_maxmin_split(self, sizes, preassigned_smiles):
-            
-    #     data = pd.read_csv(self.test_data_path)
-    #     ncols = data.shape[1]
-    #     clustering = MaxMinClustering(seed=self.seed)
-    #     splitter = GloballyBalancedSplit(
-    #         sizes = sizes, 
-    #         clustering_method = clustering,
-    #         time_limit_seconds=self.time_limit,
-    #     )
-    #     data = splitter(data, preassigned_smiles=preassigned_smiles)
+    def test_GBMTSplit(self, sizes, test_size, preassigned_smiles):
+        splitter = GBMTSplit(test_size=test_size, sizes=sizes)
+        split = splitter.split(self.X, self.y, self.smiles_list, preassigned_smiles=preassigned_smiles)
 
-    #     assert data.shape[1] == ncols + 2
-    #     assert data.Split.nunique() == 4
+        assert len(next(split)) == 2
 
-    #     if preassigned_smiles is not None:
-    #         for smiles, subset in preassigned_smiles.items():
-    #             assert data.loc[data['SMILES'] == smiles, 'Split'].values[0] == subset
+        if preassigned_smiles is not None:
+            test_indices = next(split)[1]
+            test_smiles = [self.smiles_list[i] for i in test_indices]
+            assert all([smiles in preassigned_smiles.keys() for smiles in test_smiles])
 
-    # def test_dissimilarity_leader_split(self):
-            
-    #     data = pd.read_csv(self.test_data_path)
-    #     ncols = data.shape[1]
-    #     clustering = LeaderPickerClustering(
-    #         fp_calculator=GetMorganGenerator(radius=2, fpSize=1024),
-    #         similarity_threshold=0.6)
-    #     splitter = GloballyBalancedSplit(
-    #         clustering_method = clustering,
-    #         time_limit_seconds=self.time_limit,
-    #     )
-    #     data = splitter(data)
+    @parameterized.expand([
+        (2, None),
+        (5, None), # Use preassigned_smiles once it is implemented
+    ])
 
-    #     assert data.shape[1] == ncols + 2
-    #     assert data.Split.nunique() == 3
+    def test_GBMTRepeatedSplit(self, n_repeats, preassigned_smiles):
+        splitter = GBMTRepeatedSplit(n_repeats=n_repeats)
+        split = splitter.split(self.X, self.y, self.smiles_list, preassigned_smiles=preassigned_smiles)
 
-    # def test_murcko_scaffold_split(self):
+        count = 0
+        for i, s in enumerate(split):
+            assert len(s) == 2
+            count += 1
+        assert count == n_repeats
+
+        # if preassigned_smiles is not None:
+        #     test_indices = next(split)[1]
+        #     test_smiles = [self.smiles_list[i] for i in test_indices]
+        #     assert all([smiles in preassigned_smiles.keys() for smiles in test_smiles])
     
-    #     data = pd.read_csv(self.test_data_path)
-    #     ncols = data.shape[1]
-    #     clustering = MurckoScaffoldClustering()
-    #     splitter = GloballyBalancedSplit(
-    #         clustering_method = clustering,
-    #         time_limit_seconds=self.time_limit,
-    #         min_distance=False
-    #     )
-    #     data = splitter(data)
+    @parameterized.expand([
+        RandomClustering(),
+        MaxMinClustering(),
+        LeaderPickerClustering(),
+        MurckoScaffoldClustering(),
+        'predifined_clusters'
+    ])
 
-    #     assert data.shape[1] == ncols + 1
-    #     assert data.Split.nunique() == 3
+    def test_GBMTKFold(self, clustering_method=None):
+        if clustering_method == 'predifined_clusters':
+            # Create predifined clusters
+            mol_idx = np.arange(len(self.smiles_list))
+            clusters = np.array_split(mol_idx, 20)
+            clustering_method = {i : [] for i in range(20)}
+            for i, cluster in enumerate(clusters):
+                for idx in cluster:
+                    clustering_method[i].append(self.smiles_list[idx])
+            
+        splitter = GBMTKFold(n_splits=5, clustering_method=clustering_method)
+        split = splitter.split(self.X, self.y, self.smiles_list)
 
-    # def test_multiple_random_splits(self):
+        count = 0
+        for i, s in enumerate(split):
+            assert len(s) == 2
+            count += 1
+        assert count == 5
 
-    #     data = pd.read_csv(self.test_data_path)
-    #     ncols = data.shape[1]
-    #     clustering = RandomClustering(seed=self.seed)
-    #     splitter = GloballyBalancedSplit(
-    #         clustering_method = clustering,
-    #         time_limit_seconds=self.time_limit,
-    #         n_splits=3,
-    #         absolute_gap = 1e-3,
-    #     )
-    #     data = splitter(data)
+    def test_GBMTRepeatedKFold(self,):
+        splitter = GBMTRepeatedKFold(n_splits=5, n_repeats=3)
+        split = splitter.split(self.X, self.y, self.smiles_list)
 
-    #     assert data.shape[1] == ncols + (3 * 2)
-    #     for i in range(3):
-    #         assert data[f'Split_{i}'].nunique() == 3
+        count = 0
+        for i, s in enumerate(split):
+            assert len(s) == 2
+            count += 1
+        assert count == 5 * 3

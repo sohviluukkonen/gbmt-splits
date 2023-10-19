@@ -1,56 +1,59 @@
 import numpy as np
-import pandas as pd
 
 from abc import ABC, abstractmethod
-
 from pulp import *
-from typing import Callable
-
-from rdkit import Chem, DataStructs
-from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
 
 from .clustering import ClusteringMethod, MaxMinClustering, RandomClustering
 from .logs import logger
 
-class GBMTSplitter():
-
-    """ Globally Balanced Multi-Task Splitter in sklearn style"""
-
+class GBMTBase(ABC):
+    """
+    Base class for GBMT splitters
+    """
     def __init__(
-            self,
-            sizes : list[int] = [0.8, 0.1, 0.1],
-            clustering_method : ClusteringMethod | None = MaxMinClustering(),
-            n_repeats : int = 1,
-            equal_weight_perc_compounds_as_tasks : bool = True,
-            absolute_gap : float = 1e-3,
-            time_limit_seconds : int = None,
-            n_jobs : int = 1,
-            min_distance : bool = True,  
-            stratify : bool = True,
-            stratify_reg_nbins : int = 5,  
+        self,
+        sizes : list[int] = [0.8, 0.1, 0.1],
+        clustering_method : ClusteringMethod | dict = MaxMinClustering(),
+        equal_weight_perc_compounds_as_tasks : bool = True,
+        absolute_gap : float = 1e-3,
+        time_limit_seconds : int = None,
+        n_jobs : int = 1,
+        stratify : bool = True,
+        stratify_reg_nbins : int = 5,  
     ):
         self.sizes = sizes
         self.clustering_method = clustering_method
-        self.n_repeats = n_repeats
         self.equal_weight_perc_compounds_as_tasks = equal_weight_perc_compounds_as_tasks
         self.absolute_gap = absolute_gap
         self.time_limit_seconds = time_limit_seconds
         self.n_jobs = n_jobs
-        self.min_distance = min_distance
         self.stratify = stratify
-        self.stratify_reg_nbins = stratify_reg_nbins    
-    
+        self.stratify_reg_nbins = stratify_reg_nbins
+
+
     @abstractmethod
-    def split(
-        self,
-        X : np.array, 
-        y : np.array, 
-        smiles_list : list[str] | None = None,
-        task_names : list[str] | None = None,
-        preassigned_smiles : dict[str, int] | None = None ) -> list:
+    def split(X : np.array, y : np.array, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def get_n_splits(X : np.array, y : np.array = None, *args, **kwargs):
+        pass
+
+    def get_meta_routing():
+        # For consistency with sklearn style (to be implemented?)
+        logger.warning("get_meta_routing is not implemented")
+        pass
+
+    def _split(
+              self,
+              X : np.array,
+              y : np.array,
+              smiles_list : list[str] | None = None,
+              task_names : list[str] | None = None,
+              preassigned_smiles : dict[str, int] | None = None ) -> list:
         """
         Split the data into subsets
-        
+
         Parameters
         ----------
         X : np.array
@@ -63,8 +66,67 @@ class GBMTSplitter():
             The list of task names
         preassigned_smiles : dict[str, int] | None
             The dictionary of preassigned smiles. The keys are the smiles and the values are the subset/fold indices.
-        """
+
+        Returns
+        -------
+        tuple of lists of ints
+            Tuple of molecule indices for each subset. The tuple length is equal to the number of subsets.
+        """       
+
+        # One hot encode the target value matrix
+        y = self._one_hot_encode(y)     
+
+        # Cluster the data
+        if isinstance(self.clustering_method, dict):
+            smiles_from_clusters = [smiles for cluster in self.clustering_method.values() for smiles in cluster]
+            if set(smiles_list) != set(smiles_from_clusters):
+                raise ValueError("The SMILES strings in the clustering dictionary must match the SMILES strings in the SMILES list")
+            # Clusters : cluster index -> list of smiles indices
+            clusters = {i : [j for j, smiles in enumerate(smiles_list) if smiles in smiles_from_clusters] for i in self.clustering_method.keys()}
+        else:
+            clusters = self.clustering_method.__call__(smiles_list)
+
+        # Preassign clusters to subset/folds based on preassigned smiles
+        if preassigned_smiles:
+            preassigned_clusters = self._get_preassigned_clusters(preassigned_smiles, clusters)
+            logger.info('Preassigned clusters:')
+            logger.info(preassigned_clusters)
+        else:
+            preassigned_clusters = None
+
+        # Compute the number of datapoints per task for each cluster
+        task_vs_clusters = self._get_data_summary_per_cluster(y, clusters)
+
+        # Set time limit for linear programming
+        if self.time_limit_seconds is None:
+            self.time_limit_seconds = self._get_default_time_limit_seconds(y.shape[0], y.shape[1])
+
+        # Merge the clusters with a linear programming method to create the subsets
+        merged_clusters_mapping = self._merge_clusters_with_balancing_mapping(
+            task_vs_clusters, 
+            self.sizes, 
+            self.equal_weight_perc_compounds_as_tasks, 
+            self.absolute_gap,
+            self.time_limit_seconds, 
+            preassigned_clusters)  
         
+        # Tuple of molecule indices for each subset
+        split_tuple = ()
+        for subset in range(1,len(self.sizes)+1):
+            cluster_indices = [i for i, x in enumerate(merged_clusters_mapping) if x == subset]
+            smiles_indices = [x for i, cluster in clusters.items() if i in cluster_indices for x in cluster]
+            split_tuple += (smiles_indices,)
+            
+        return split_tuple
+    
+    def _check_input_consistency(
+            self, 
+            X : np.array, 
+            y : np.array, 
+            smiles_list : list[str] | None = None, 
+            task_names : list[str] | None = None,
+            preassigned_smiles : dict[str, int] | None = None):
+
         assert X.shape[0] == y.shape[0], "X and y must have the same number of rows"
         if smiles_list is not None:
             assert X.shape[0] == len(smiles_list), "X and smiles_list must have the same number of rows"
@@ -73,38 +135,18 @@ class GBMTSplitter():
 
         if not smiles_list:
             if preassigned_smiles:
-                raise ValueError("smiles_list must be provided when preassigned_smiles is provided")    
-            if not isinstance(self.clustering_method, RandomClustering):
+                raise ValueError("smiles_list must be provided when preassigned_smiles is provided")
+            if not isinstance(self.clustering_method, RandomClustering) or \
+                not isinstance(self.clustering_method, dict):
                 raise ValueError("smiles_list must be provided when clustering_method is not RandomClustering")
             else:
-                smiles_list = [f"smiles_{i}" for i in range(X.shape[0])]    
-
+                smiles_list = [f"smiles_{i}" for i in range(X.shape[0])]   
     
-        if self.n_repeats > 1 and not (isinstance(self.clustering_method, MaxMinClustering)
-                                    or isinstance(self.clustering_method, RandomClustering)):
-                raise ValueError("n_repeat > 1 is only supported for MaxMinClustering and RandomClustering")
-        
-        if self.stratify:
-             # TODO: implement stratification
-             pass
-        
-        # One hot encode the target value matrix
-        y_encoded = self._one_hot_encode(y)
-            
-        splits = []
-        for i in range(self.n_repeats):
-            logger.info(f"Splitting data, repeat {i+1}/{self.n_repeats}")
-            split = self._split(X, y_encoded, smiles_list, task_names, preassigned_smiles)
-            splits.append(split)
-
-        return splits
-            # yield self._split(X, y, smiles_list, task_names, preassigned_smiles)
-
-
     def _stratify(self, y : np.array, task_names : list[str] | None = None) -> np.array:
         """
-        Stratify the data
-
+        Stratify the data in each task. If the values are floats, the data is stratified
+        into bins, and each bin is one-hot encoded to new columns. If values are integers
+        or strings, the data is stratified into one-hot encoded to new columns. 
         Parameters
         ----------
         y : np.array
@@ -146,55 +188,8 @@ class GBMTSplitter():
                 for j, unique_task_value in enumerate(unique_task_values):
                     stratified_task_names.append(f"{task_name}_{unique_task_value}")
                     task_values_one_hot[:, j] = task_values == unique_task_value
-
-
-
-        
-
         
         raise NotImplementedError
-    
-    def _split(
-              self,
-              X : np.array,
-              y : np.array,
-              smiles_list : list[str] | None = None,
-              task_names : list[str] | None = None,
-              preassigned_smiles : dict[str, int] | None = None ) -> list:
-        """
-        Split the data into subsets
-        """            
-
-        # Cluster the data
-        clusters = self.clustering_method.__call__(smiles_list)
-
-        # Preassign clusters to subset/folds based on preassigned smiles
-        if preassigned_smiles:
-            preassigned_clusters = self._get_preassigned_clusters(preassigned_smiles, clusters)
-        else:
-            preassigned_clusters = None
-
-        # Compute the number of datapoints per task for each cluster
-        task_vs_clusters = self._get_task_vs_clusters(y, clusters)
-
-        # Set time limit for linear programming
-        if self.time_limit_seconds is None:
-            self.time_limit_seconds = self._get_default_time_limit_seconds(y.shape[0], y.shape[1])
-
-        # Merge the clusters with a linear programming method to create the subsets
-        merged_clusters_mapping = self._merge_clusters_with_balancing_mapping(
-            task_vs_clusters, 
-            self.sizes, 
-            self.equal_weight_perc_compounds_as_tasks, 
-            self.absolute_gap,
-            self.time_limit_seconds, 
-            preassigned_clusters)  
-
-
-        return merged_clusters_mapping
-
-
-
 
     def _get_preassigned_clusters(
             self, 
@@ -209,30 +204,25 @@ class GBMTSplitter():
         smiles_list : list[str]
             The list of SMILES strings
         preassigned_smiles : dict[str, int]
-            The dictionary of preassigned smiles. The keys are the smiles and the values are the subset/fold indices.
+            The dictionary of preassigned smiles. The keys are the smiles and
+            the values are the subset/fold indices.
         clusters : dict
-            The dictionary of clusters. The keys are cluster indices and values are indices of SMILES strings.
+            The dictionary of clusters. The keys are cluster indices and 
+            the values are indices of SMILES strings.
 
         Returns
         -------
         dict
-            The dictionary of preassigned clusters. The keys are the cluster indices and the values are the subset/fold indices.
+            The dictionary of preassigned clusters. The keys are the cluster indices and
+            the values are the subset/fold indices.
         """
 
-        raise NotImplementedError
-
-        preassigned_clusters = {}
-        for smiles, subset_index in preassigned_smiles.items():
-            for cluster_index, cluster in clusters.items():
-                if smiles in cluster:
-                    preassigned_clusters[smiles] = subset_index
-                    break
-            else:
-                raise ValueError(f"SMILES {smiles} not found in any cluster")
+        raise NotImplementedError    
 
     def _one_hot_encode(self, y : np.array) -> np.array:
         """
-        One hot encode the target values. All np.nans are replaced with 0s and all other values are replaced with 1s.
+        One hot encode the target values. All non-NaN values are encoded as 1,
+        and all NaN values are encoded as NaN.
         
         Parameters
         ----------
@@ -244,20 +234,41 @@ class GBMTSplitter():
         np.array
             The one hot encoded target values.
         """
-        y_ = np.zeros(y.shape)
-        # Loop through the elements and set NaNs to 0 and non-NaN floats to 1
-        for i, value in enumerate(y):
-            if isinstance(value, float) and np.isnan(value):
-                y_[i] = 0
-            elif isinstance(value, str):
-                try:
-                    if not np.isnan(float(value)):
-                        y_[i] = 1
-                except ValueError:
-                    pass
+        y_ = np.empty(y.shape)
+        for i in range(y.shape[0]):
+            for j in range(y.shape[1]):
+                if not isinstance(y[i, j], float) or not np.isnan(y[i, j]):
+                    y_[i, j] = 1
+                else:
+                    y_[i, j] = y[i, j]
         return y_
 
-    def _get_task_vs_clusters(
+    def _get_default_time_limit_seconds(self, nmols : int, ntasks : int) -> int:
+        """
+        Compute the default time limit for linear programming based on 
+        number of datapoints and number of tasks.
+        
+        Parameters
+        ----------
+        nmols : int
+            Number of datapoints
+        ntasks : int
+            Number of tasks
+        
+        Returns
+        -------
+        int
+            The default time limit in seconds
+        """
+        tmol = nmols ** (1/3)
+        ttarget = np.sqrt(ntasks)
+        tmin = 10
+        tmax = 60 * 60
+        tlim = int(min(tmax, max(tmin, tmol * ttarget)))
+        logger.info(f'Time limit for LP: {tlim}s')
+        return tlim
+
+    def _get_data_summary_per_cluster(
             self,
             y : np.array,
             clusters : dict ) -> dict:
@@ -288,38 +299,9 @@ class GBMTSplitter():
         # Compute the number of datapoints per task for each cluster
         for i in range(ntasks):
             for j, cluster in clusters.items():
-                # print(y[cluster, i])
-                # Number non-NaN values
                 task_vs_clusters[i+1, j] = np.count_nonzero(y[cluster, i])
         
         return task_vs_clusters
-
-    def _get_default_time_limit_seconds(self, nmols : int, ntasks : int) -> int:
-        """
-        Compute the default time limit for linear programming based on 
-        number of datapoints and number of tasks.
-        
-        Parameters
-        ----------
-        nmols : int
-            Number of datapoints
-        ntasks : int
-            Number of tasks
-        
-        Returns
-        -------
-        int
-            The default time limit in seconds
-        """
-        tmol = nmols ** (1/3)
-        ttarget = np.sqrt(ntasks)
-        tmin = 10
-        tmax = 60 * 60
-        tlim = int(min(tmax, max(tmin, tmol * ttarget)))
-        logger.info(f'Time limit for LP: {tlim}s')
-        return tlim
-
-
 
     def _merge_clusters_with_balancing_mapping(
             self, 
@@ -471,28 +453,301 @@ class GBMTSplitter():
             mapping = [x for _, x in sorted(zip(list_initial_cluster_indices, list_final_ML_subsets))]
 
             return mapping 
-
-    def get_n_splits(self):
-        """Returns the number of splitting iterations in the cross-validator"""
-        return len(self.sizes)
     
+class GBMTSplit(GBMTBase):
+    """
+    Globally Balanced Multi-Task Splitter for single split
+    """
 
-if __name__ == '__main__':
+    def __init__(
+            self, 
+            test_size : float | None = None,
+            sizes: list[int] | None = None,
+            clustering_method: ClusteringMethod | dict = MaxMinClustering(),
+            equal_weight_perc_compounds_as_tasks: bool = True,
+            absolute_gap: float = 0.001,
+            time_limit_seconds: int = None,
+            n_jobs: int = 1,
+            stratify: bool = True,
+            stratify_reg_nbins: int = 5):
+        
+        super().__init__(sizes, clustering_method,  equal_weight_perc_compounds_as_tasks, absolute_gap, time_limit_seconds, n_jobs, stratify, stratify_reg_nbins)
+
+        if test_size is None and sizes is None:
+            raise ValueError("Either test_size or sizes must be provided")
+        elif test_size is not None and sizes is not None:
+            raise ValueError("Either test_size or sizes must be provided, but not both")
+        elif test_size is not None:
+            self.sizes = [1-test_size, test_size]
+        elif np.sum(sizes) != 1:
+            raise ValueError("The sum of subset sizes must be equal to 1")
     
-    import os
-    print(os.getcwd())
-    df = pd.read_csv('C:\\Users\\admin\\RESEARCH\\Leiden\\gbmt-splits\\gbmtsplits\\test_data.csv')
-    smiles_list = df['SMILES'].tolist()
-    y = df.drop(columns=['SMILES']).to_numpy()
-    X = np.zeros((y.shape[0], 1))
-
-    splitter = GBMTSplitter()
-    split = splitter.split(X, y, smiles_list)
-
+    def get_n_splits(self, X: np.array, y: np.array  = None, *args, **kwargs):
+        return 1 # Check if this is correct by looking at sklearn's splitter
     
+    def split(
+            self,
+            X : np.array,
+            y : np.array,
+            smiles_list : list[str] | None = None,
+            task_names : list[str] | None = None,
+            preassigned_smiles : dict[str, int] | None = None):
+
+        """
+        Generate list of indices to split data into subsets.
+        
+        Parameters
+        ----------
+        X : np.array
+            The input data
+        y : np.array
+            The target values
+        smiles_list : list[str] | None
+            The list of SMILES strings
+        task_names : list[str] | None
+            The list of task names
+        preassigned_smiles : dict[str, int] | None
+            The dictionary of preassigned smiles. The keys are the smiles and 
+            the values are the subset indices.
+
+        Yields
+        ------
+        tuple of lists of ints
+            Tuple of molecule indices for each subset. The tuple length is equal to 
+            the number of subsets.
+        """
+
+        self._check_input_consistency(X, y, smiles_list, task_names, preassigned_smiles)
+
+        if self.stratify:
+             # TODO: implement stratification
+             pass
+        
+        logger.info(f"Splitting data into {len(self.sizes)} subsets of sizes {self.sizes}")
+        split = self._split(X, y, smiles_list, task_names, preassigned_smiles)
+        yield split
+    
+class GBMTRepeatedSplit(GBMTBase):
+    """
+    Globally Balanced Multi-Task Splitter for repeated splits
+    """
+    def __init__(
+            self,
+            test_size : float | None = 0.2, 
+            sizes: list[int] = None,
+            n_repeats : int = 5,
+            clustering_method: ClusteringMethod | dict = MaxMinClustering(),
+            equal_weight_perc_compounds_as_tasks: bool = True,
+            absolute_gap: float = 0.001,
+            time_limit_seconds: int = None,
+            n_jobs: int = 1,
+            stratify: bool = True,
+            stratify_reg_nbins: int = 5):
+        super().__init__(sizes, clustering_method, equal_weight_perc_compounds_as_tasks, absolute_gap, time_limit_seconds, n_jobs, stratify, stratify_reg_nbins)
+
+        if test_size is None and sizes is None:
+            raise ValueError("Either test_size or sizes must be provided")
+        elif test_size is not None and sizes is not None:
+            raise ValueError("Either test_size or sizes must be provided, but not both")
+        elif test_size is not None:
+            self.sizes = [1-test_size, test_size]
+        elif np.sum(sizes) != 1:
+            raise ValueError("The sum of subset sizes must be equal to 1")
+
+        self.n_repeats = n_repeats
+
+        if self.n_repeats < 1:
+            raise ValueError("n_repeats must be greater than 0")
+        
+        if not (isinstance(self.clustering_method, MaxMinClustering) or 
+                    not isinstance(self.clustering_method, RandomClustering)):
+                raise ValueError("GBMTRepeatedSplit only supports MaxMinClustering and RandomClustering")
+        
+    def get_n_splits(self, X: np.array, y: np.array  = None, *args, **kwargs):
+        return self.n_repeats
+    
+    def split(
+            self,
+            X : np.array,
+            y : np.array,
+            smiles_list : list[str] | None = None,
+            task_names : list[str] | None = None,
+            preassigned_smiles : dict[str, int] | None = None):
+        """
+        Repeats of GBMTSplit.split method with different clusterings at each repeat.
+        
+        Parameters
+        ----------
+        X : np.array
+            The input data
+        y : np.array
+            The target values
+        smiles_list : list[str] | None
+            The list of SMILES strings
+        task_names : list[str] | None
+            The list of task names
+        preassigned_smiles : dict[str, int] | None
+            The dictionary of preassigned smiles. The keys are the smiles and
+            the values are the subset indices.
+
+        Yields
+        ------
+        tuple of lists of ints
+            Tuple of molecule indices for each subset. The tuple length is equal to 
+            the number of subsets.
+        """
+
+        self._check_input_consistency(X, y, smiles_list, task_names, preassigned_smiles)
+
+        if self.stratify:
+            # TODO: implement stratification
+            pass
+
+        for i in range(self.n_repeats):
+            logger.info(f"Splitting data, repeat {i+1}/{self.n_repeats}")
+            split = self._split(X, y, smiles_list, task_names, preassigned_smiles)
+            self.clustering_method.seed += 1
+            yield split
 
 
+class GBMTKFold(GBMTBase):
+    """
+    Globally Balanced Multi-Task Splitter for k-fold cross-validation
+    
+    """
+
+    def __init__(
+            self, 
+            n_splits : int = 5,
+            clustering_method: ClusteringMethod | dict = MaxMinClustering(),
+            equal_weight_perc_compounds_as_tasks: bool = True,
+            absolute_gap: float = 0.001,
+            time_limit_seconds: int = None,
+            n_jobs: int = 1,
+            stratify: bool = True,
+            stratify_reg_nbins: int = 5):
+        super().__init__(None, clustering_method, equal_weight_perc_compounds_as_tasks, absolute_gap, time_limit_seconds, n_jobs, stratify, stratify_reg_nbins)
+
+        self.n_splits = n_splits
+        if self.n_splits < 2:
+            raise ValueError("n_splits must be greater than 1")
+        
+        self.sizes = [1/n_splits for _ in range(n_splits)]
+
+    def get_n_splits(self, X: np.array, y: np.array  = None, *args, **kwargs):
+        return self.n_splits
+    
+    def split(
+            self,
+            X : np.array,
+            y : np.array,
+            smiles_list : list[str] | None = None,
+            task_names : list[str] | None = None):
+        """
+        Generate list of indices to split data into subsets for k-fold cross-validation.
+
+        Parameters
+        ----------
+        X : np.array
+            The input data
+        y : np.array
+            The target values
+        smiles_list : list[str] | None
+            The list of SMILES strings
+        task_names : list[str] | None
+            The list of task names
+
+        Yields
+        ------
+        tuple of lists of ints
+            Tuple of molecule indices for each subset. The tuple length is equal to 
+            the number of subsets.
+        """
+        self._check_input_consistency(X, y, smiles_list, task_names)
+
+        if self.stratify:
+            # TODO: implement stratification
+            pass
+
+        logger.info(f"Creating {self.n_splits}-fold cross-validation splits")
+        split = self._split(X, y, smiles_list, task_names)
+        for i in range(self.n_splits):
+            test_indices = split[i]
+            train_indices = [x for j in range(self.n_splits) if j != i for x in split[j]]
+            yield train_indices, test_indices
+
+class GBMTRepeatedKFold(GBMTBase):
+    """
+    Globally Balanced Multi-Task Splitter for repeated cross-validation splits.
+    """
+
+    def __init__(
+            self, 
+            n_splits : int = 5,
+            n_repeats : int = 5,
+            clustering_method: ClusteringMethod | dict = MaxMinClustering(),
+            equal_weight_perc_compounds_as_tasks: bool = True,
+            absolute_gap: float = 0.001,
+            time_limit_seconds: int = None,
+            n_jobs: int = 1,
+            stratify: bool = True, 
+            stratify_reg_nbins: int = 5):
+        super().__init__(None, clustering_method, equal_weight_perc_compounds_as_tasks, absolute_gap, time_limit_seconds, n_jobs, stratify, stratify_reg_nbins)
 
 
+        self.n_splits = n_splits
+        if self.n_splits < 2:
+            raise ValueError("n_splits must be greater than 1")
+        self.sizes = [1/n_splits for _ in range(n_splits)]
 
+        self.n_repeats = n_repeats
+        if self.n_repeats < 1:
+            raise ValueError("n_repeats must be greater than 0")
+        
+        if not (isinstance(self.clustering_method, MaxMinClustering) or 
+                    not isinstance(self.clustering_method, RandomClustering)):
+                raise ValueError("GBMTRepeatedKfold only supports MaxMinClustering and RandomClustering")
+        
+    def get_n_splits(self, X: np.array, y: np.array  = None, *args, **kwargs):
+        return self.n_repeats * self.n_splits
+    
+    def split(
+            self,
+            X : np.array,
+            y : np.array,
+            smiles_list : list[str] | None = None,
+            task_names : list[str] | None = None):
+        """
+        Repeats of GBMTKFold.split method with different clusterings at each repeat.
 
+        Parameters
+        ----------
+        X : np.array
+            The input data
+        y : np.array
+            The target values
+        smiles_list : list[str] | None
+            The list of SMILES strings
+        task_names : list[str] | None
+            The list of task names
+
+        Yields
+        ------
+        tuple of lists of ints
+            Tuple of molecule indices for each subset. The tuple length is equal to 
+            the number of subsets.
+        """
+        self._check_input_consistency(X, y, smiles_list, task_names)
+
+        if self.stratify:
+            # TODO: implement stratification
+            pass
+
+        for i in range(self.n_repeats):
+            logger.info(f"Creating {self.n_splits}-fold cross-validation splits, repeat {i+1}/{self.n_repeats}")
+            split = self._split(X, y, smiles_list, task_names)
+            self.clustering_method.seed += 1
+            for j in range(self.n_splits):
+                test_indices = split[j]
+                train_indices = [x for k in range(self.n_splits) if k != j for x in split[k]]
+                yield train_indices, test_indices
