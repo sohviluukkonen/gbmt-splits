@@ -1,8 +1,7 @@
 """
 Module for splitting data into subsets for globally balanced multi-task learning.
 
-Author: Sohvi Luukkonen
-Date: 2023-10-20
+Authors: Sohvi Luukkonen & Giovanni Tricarico
 """
 
 import numpy as np
@@ -537,7 +536,7 @@ class GBMTSplit(GBMTBase):
             raise ValueError("The sum of subset sizes must be equal to 1")
     
     def get_n_splits(self, X: np.array, y: np.array  = None, *args, **kwargs):
-        return 1 # Check if this is correct by looking at sklearn's splitter
+        return 1 
     
     def split(
             self,
@@ -545,7 +544,8 @@ class GBMTSplit(GBMTBase):
             y : np.array,
             smiles_list : list[str] | None = None,
             task_names : list[str] | None = None,
-            preassigned_smiles : dict[str, int] | None = None):
+            preassigned_smiles : dict[str, int] | None = None,
+            *args, **kwargs):
 
         """
         Generate list of indices to split data into subsets.
@@ -622,7 +622,8 @@ class GBMTRepeatedSplit(GBMTBase):
             y : np.array,
             smiles_list : list[str] | None = None,
             task_names : list[str] | None = None,
-            preassigned_smiles : dict[str, int] | None = None):
+            preassigned_smiles : dict[str, int] | None = None,
+            *args, **kwargs):
         """
         Repeats of GBMTSplit.split method with different clusterings at each repeat.
         
@@ -654,7 +655,6 @@ class GBMTRepeatedSplit(GBMTBase):
             split = self._split(X, y, smiles_list, task_names, preassigned_smiles)
             self.clustering_method.seed += 1
             yield split
-
 
 class GBMTKFold(GBMTBase):
     """
@@ -688,7 +688,8 @@ class GBMTKFold(GBMTBase):
             X : np.array,
             y : np.array,
             smiles_list : list[str] | None = None,
-            task_names : list[str] | None = None):
+            task_names : list[str] | None = None,
+            *args, **kwargs):
         """
         Generate list of indices to split data into subsets for k-fold cross-validation.
 
@@ -758,7 +759,8 @@ class GBMTRepeatedKFold(GBMTBase):
             X : np.array,
             y : np.array,
             smiles_list : list[str] | None = None,
-            task_names : list[str] | None = None):
+            task_names : list[str] | None = None,
+            *args, **kwargs):
         """
         Repeats of GBMTKFold.split method with different clusterings at each repeat.
 
