@@ -7,8 +7,6 @@ from parameterized import parameterized
 
 import logging
 
-from rdkit.Chem.rdFingerprintGenerator import GetMorganGenerator
-
 from .clustering import RandomClustering, MaxMinClustering, LeaderPickerClustering, MurckoScaffoldClustering
 from .splitters import *
 
@@ -32,24 +30,24 @@ class TestSplits(TestCase):
     X = np.zeros((y.shape[0], 1))
 
     @parameterized.expand([
-        ([0.8, 0.2], None, None), 
-        (None, 0.2, None,), # Use preassigned_smiles once it is implemented
+        ([0.8, 0.2], None, None, True), 
+        (None, 0.2, preassigned_smiles, False), 
     ])  
     
-    def test_GBMTSplit(self, sizes, test_size, preassigned_smiles):
-        splitter = GBMTSplit(test_size=test_size, sizes=sizes)
+    def test_GBMTSplit(self, sizes, test_size, preassigned_smiles, stratify):
+        splitter = GBMTSplit(test_size=test_size, sizes=sizes, stratify=stratify)
         split = splitter.split(self.X, self.y, self.smiles_list, preassigned_smiles=preassigned_smiles)
 
-        assert len(next(split)) == 2
-
-        if preassigned_smiles is not None:
-            test_indices = next(split)[1]
-            test_smiles = [self.smiles_list[i] for i in test_indices]
-            assert all([smiles in preassigned_smiles.keys() for smiles in test_smiles])
+        for i, s in enumerate(split):
+            assert len(s) == 2
+            if preassigned_smiles:
+                for asg_smiles, asg_subset in preassigned_smiles.items():
+                    indices = s[asg_subset]
+                    assert asg_smiles in [self.smiles_list[i] for i in indices]
 
     @parameterized.expand([
         (2, None),
-        (5, None), # Use preassigned_smiles once it is implemented
+        (5, preassigned_smiles), 
     ])
 
     def test_GBMTRepeatedSplit(self, n_repeats, preassigned_smiles):
@@ -60,23 +58,22 @@ class TestSplits(TestCase):
         for i, s in enumerate(split):
             assert len(s) == 2
             count += 1
+            if preassigned_smiles:
+                for asg_smiles, asg_subset in preassigned_smiles.items():
+                    indices = s[asg_subset]
+                    assert asg_smiles in [self.smiles_list[i] for i in indices]
         assert count == n_repeats
-
-        # if preassigned_smiles is not None:
-        #     test_indices = next(split)[1]
-        #     test_smiles = [self.smiles_list[i] for i in test_indices]
-        #     assert all([smiles in preassigned_smiles.keys() for smiles in test_smiles])
     
     @parameterized.expand([
         RandomClustering(),
         MaxMinClustering(),
         LeaderPickerClustering(),
         MurckoScaffoldClustering(),
-        'predifined_clusters'
+        'predefined_clusters'
     ])
 
     def test_GBMTKFold(self, clustering_method=None):
-        if clustering_method == 'predifined_clusters':
+        if clustering_method == 'predefined_clusters':
             # Create predifined clusters
             mol_idx = np.arange(len(self.smiles_list))
             clusters = np.array_split(mol_idx, 20)

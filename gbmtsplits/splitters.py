@@ -1,4 +1,12 @@
+"""
+Module for splitting data into subsets for globally balanced multi-task learning.
+
+Author: Sohvi Luukkonen
+Date: 2023-10-20
+"""
+
 import numpy as np
+import pandas as pd
 
 from abc import ABC, abstractmethod
 from pulp import *
@@ -73,24 +81,22 @@ class GBMTBase(ABC):
             Tuple of molecule indices for each subset. The tuple length is equal to the number of subsets.
         """       
 
+        # Stratify the data
+        if self.stratify:
+            y, task_names = self._stratify(y, task_names)
+
         # One hot encode the target value matrix
         y = self._one_hot_encode(y)     
 
         # Cluster the data
         if isinstance(self.clustering_method, dict):
-            smiles_from_clusters = [smiles for cluster in self.clustering_method.values() for smiles in cluster]
-            if set(smiles_list) != set(smiles_from_clusters):
-                raise ValueError("The SMILES strings in the clustering dictionary must match the SMILES strings in the SMILES list")
-            # Clusters : cluster index -> list of smiles indices
-            clusters = {i : [j for j, smiles in enumerate(smiles_list) if smiles in smiles_from_clusters] for i in self.clustering_method.keys()}
+            clusters = self._get_predefined_clusters(smiles_list)
         else:
             clusters = self.clustering_method.__call__(smiles_list)
 
         # Preassign clusters to subset/folds based on preassigned smiles
         if preassigned_smiles:
-            preassigned_clusters = self._get_preassigned_clusters(preassigned_smiles, clusters)
-            logger.info('Preassigned clusters:')
-            logger.info(preassigned_clusters)
+            preassigned_clusters = self._get_preassigned_clusters(smiles_list, preassigned_smiles, clusters)
         else:
             preassigned_clusters = None
 
@@ -108,6 +114,7 @@ class GBMTBase(ABC):
             self.equal_weight_perc_compounds_as_tasks, 
             self.absolute_gap,
             self.time_limit_seconds, 
+            self.n_jobs,
             preassigned_clusters)  
         
         # Tuple of molecule indices for each subset
@@ -118,6 +125,30 @@ class GBMTBase(ABC):
             split_tuple += (smiles_indices,)
             
         return split_tuple
+    
+    def _get_predefined_clusters(self, smiles_list : list):
+        """
+        Get predefined clusters, check that the SMILES strings in the clustering dictionary
+        match the SMILES strings in the SMILES list, and transform SMILES strings to indices.
+
+        Parameters
+        ----------
+        smiles_list : list[str]
+            The list of SMILES strings
+
+        Returns
+        -------
+        dict
+            The dictionary of clusters. The keys are cluster indices and values are indices of SMILES strings.
+        """
+
+        smiles_from_clusters = [smiles for cluster in self.clustering_method.values() for smiles in cluster]
+        if set(smiles_list) != set(smiles_from_clusters):
+            raise ValueError("The SMILES strings in the clustering dictionary must match the SMILES strings in the SMILES list")
+        # Clusters : cluster index -> list of smiles indices
+        clusters = {i : [j for j, smiles in enumerate(smiles_list) if smiles in smiles_from_clusters] for i in self.clustering_method.keys()}
+
+        return clusters
     
     def _check_input_consistency(
             self, 
@@ -158,11 +189,8 @@ class GBMTBase(ABC):
         -------
         np.array
             The stratified target values
-        """
-
-        raise NotImplementedError
-        
-        def is_convertible_to_float(x):
+        """        
+        def is_numeric(x):
             try:
                 float(x)
                 return True
@@ -171,25 +199,40 @@ class GBMTBase(ABC):
         
         if task_names is None:
             task_names = [f"task_{i}" for i in range(y.shape[1])]
-
-        stratified_y = np.empty((y.shape[0],))
+        
+        df = pd.DataFrame(y, columns=task_names)
         stratified_task_names = []
-        for i, task_name in enumerate(task_names):
-            task_values = y[:, i]
-            all_values_numerical = np.all([is_convertible_to_float(task_value) for task_value in task_values])
-            any_values_numerical = np.any([is_convertible_to_float(task_value) for task_value in task_values])
+        for task_name in task_names:
+            task_values = df[task_name].dropna().unique()
+            
+            # Check if values are numerical
+            task_values_numerical = np.array([is_numeric(task_value) for task_value in task_values])
+            all_values_numerical = np.all(task_values_numerical)
+            any_values_numerical = np.any(task_values_numerical)
+            
             # If values both numerical and non-numerical, raise error
             if not all_values_numerical and any_values_numerical:
                 raise ValueError(f"Task {task_name} has both numerical and non-numerical values, which is not supported for stratification")
-            # If only non-numerical values, use one-hot encoding
-            elif not any_values_numerical:
-                unique_task_values = np.unique(task_values)
-                task_values_one_hot = np.empty((task_values.shape[0], len(unique_task_values)))
-                for j, unique_task_value in enumerate(unique_task_values):
-                    stratified_task_names.append(f"{task_name}_{unique_task_value}")
-                    task_values_one_hot[:, j] = task_values == unique_task_value
+            
+            # If only non-numerical values or only integers, stratify into one-hot encoded columns
+            elif not any_values_numerical or all( value % 1 == 0 for value in task_values):
+                for value in task_values:
+                    stratified_task_names.append(f"{task_name}_{value}")
+                    df[f"{task_name}_{value}"] = df[task_name].apply(lambda x: 1 if x == value else np.nan)
+            # If values are floats, stratify into bins
+            else:
+                sorted_task_values = np.sort(task_values)
+                bins = np.array_split(sorted_task_values, self.stratify_reg_nbins)
+                for i, bin in enumerate(bins):
+                    key = f"{task_name}_{bin[0]:.2f}_{bin[-1]:.2f}"
+                    stratified_task_names.append(key)
+                    df[key] = df[task_name].apply(lambda x: 1 if x in bin else np.nan)
+            df = df.drop(columns=[task_name])
+
+        stratified_y = df.to_numpy()
+        logger.info(f"The initial {len(task_names)} tasks are stratified into {len(stratified_task_names)} tasks for balancing")
         
-        raise NotImplementedError
+        return stratified_y, stratified_task_names
 
     def _get_preassigned_clusters(
             self, 
@@ -217,7 +260,18 @@ class GBMTBase(ABC):
             the values are the subset/fold indices.
         """
 
-        raise NotImplementedError    
+        preassigned_clusters = {}
+        for smiles, subset in preassigned_smiles.items():
+            if smiles not in smiles_list:
+                raise ValueError(f"Preassigned SMILES string {smiles} not found in smiles_list")
+            else:
+                smiles_idx = smiles_list.index(smiles)
+            for cluster_idx, cluster in clusters.items():
+                if smiles_idx in cluster:
+                    preassigned_clusters[cluster_idx] = subset
+                    logger.info(f"Preassigned cluster {cluster_idx} (containing {smiles}) to subset {subset}")
+
+        return preassigned_clusters
 
     def _one_hot_encode(self, y : np.array) -> np.array:
         """
@@ -429,7 +483,7 @@ class GBMTBase(ABC):
             for c in range(N):
                 prob += LpAffineExpression([(x[c+m*N],+1) for m in range(S)]) == 1
 
-            # If preassigned_clusters is pro[int, int]vided, add the constraints to the model to force the clusters
+            # If preassigned_clusters is provided, add the constraints to the model to force the clusters
             # to be assigned to the ML subset preassigned_clusters[t]
             if preassigned_clusters:
                 for c, subset in preassigned_clusters.items():
@@ -519,10 +573,6 @@ class GBMTSplit(GBMTBase):
 
         self._check_input_consistency(X, y, smiles_list, task_names, preassigned_smiles)
 
-        if self.stratify:
-             # TODO: implement stratification
-             pass
-        
         logger.info(f"Splitting data into {len(self.sizes)} subsets of sizes {self.sizes}")
         split = self._split(X, y, smiles_list, task_names, preassigned_smiles)
         yield split
@@ -599,10 +649,6 @@ class GBMTRepeatedSplit(GBMTBase):
 
         self._check_input_consistency(X, y, smiles_list, task_names, preassigned_smiles)
 
-        if self.stratify:
-            # TODO: implement stratification
-            pass
-
         for i in range(self.n_repeats):
             logger.info(f"Splitting data, repeat {i+1}/{self.n_repeats}")
             split = self._split(X, y, smiles_list, task_names, preassigned_smiles)
@@ -664,10 +710,6 @@ class GBMTKFold(GBMTBase):
             the number of subsets.
         """
         self._check_input_consistency(X, y, smiles_list, task_names)
-
-        if self.stratify:
-            # TODO: implement stratification
-            pass
 
         logger.info(f"Creating {self.n_splits}-fold cross-validation splits")
         split = self._split(X, y, smiles_list, task_names)
@@ -738,10 +780,6 @@ class GBMTRepeatedKFold(GBMTBase):
             the number of subsets.
         """
         self._check_input_consistency(X, y, smiles_list, task_names)
-
-        if self.stratify:
-            # TODO: implement stratification
-            pass
 
         for i in range(self.n_repeats):
             logger.info(f"Creating {self.n_splits}-fold cross-validation splits, repeat {i+1}/{self.n_repeats}")
