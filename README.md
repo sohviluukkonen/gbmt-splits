@@ -4,15 +4,22 @@ A tool to create well-balanced multi-task splits without data leakage between di
 
 This package is based on the work of Giovanni Tricarico presented in [Construction of balanced, chemically dissimilar training, validation and test sets for machine learning on molecular datasets](https://chemrxiv.org/engage/chemrxiv/article-details/6253d85d88636ca19c0de92d). 
 
-Three splits are available: random-, dissimilarity- (clustering based on Tanimoto similarity of fingerprints with MaxMin or LeaderPicker) and scaffold-based (clustering based on Murcko scaffolds).
-
-# Installation
-
+## Installation
 ```
 pip install git+https://git@github.com/sohviluukkonen/gbmt-splits.git@main
 ```
 
 # Getting started
+GBMT splits is organised in five classes:
+1. **Clustering** - `ClusterMethods` to make initial clusters of molecules
+2. **Splitters** - four GBMT splitters consistent with sklearn's splitters
+   1. `GBMTSplit` - for a single split (with any number of output subsets
+   2. `GBMTRepeatedSplit` - for repeated splits
+   3. `GBMTKFold` - for a k-fold split
+   4. `GBMTRepeatedKFold` - for repated k-fold splits
+3. **Data** - wrapper to process to make splits and analyse them from dataset
+4. **Plotting** - functions to visualize the splits
+5. **CLI** - command line interface to make splits
 
 ## CLI
 The split can be easily created from the command line with
@@ -24,27 +31,11 @@ with <datasets.csv> an pivoted dataset where each row corresponds to a unique mo
 
 ## API
 
-The splits can be also created (more options for linear programming to merge initial clusters) and visualised with an API. 
+### Raw splitters
 
-```
-import pandas as pd
-from gbmtsplits.split import GloballyBalancedSplit
-from gbmtsplits.clustering import RandomClustering, MaxMinClustering, LeaderPickerClustering, MurckoScaffoldClustering
+### Splitting a dataset
 
-# Load dataset or create pivoted dataset (each row corresponds to a unique molecules and each task has it's own column)
-dataset = pd.read_csv('dataset.csv')
-
-# Set up splitter with a initial clustering method
-clustering_method = MaxMinClustering() # For dissimilarity based clustering using MaxMin algorithm to pick cluster centroids
-splitter = GloballyBalancedSplit(clustering_method=clustering_method)
-
-# or use dictionnary with precalculates clusters with keys cluster indices and values list of indices of molecules part of the cluster
-clusters = {0 : [1,4,7,...], 1 : [2,3,8,...], ...}
-splitter = GloballyBalancedSplit(clusters=clusters)
-
-# Split the data
-data = splitter(data=data)
-```
+### Visualize the split
 
 The chemical (dis)similarity of the subsets and the balance of subsets per task can visualized either for a single dataset/split:
 ```
@@ -60,21 +51,3 @@ plotter.plot_all()
   <img src="https://user-images.githubusercontent.com/25030163/219752297-7b952b1e-ad4e-485f-b786-f8a6087e084c.png" width="200"> 
 </p>
 
-or to compare multiple datasets/splits:
-```
-from gbmtsplits.plot import PlottingCompareDatasets
-
-data_rgbs['Dataset'] = 'RGBS'
-data_dgbs['Dataset'] = 'DGBS'
-data_both = pd.concat([data_rgbs, data_dgbs], ignore_index=True])
-
-plotter = PlottingCompareDatasets(data_both, compare_col='Dataset')
-plotter.plot_all()
-```
-<p float="left">
-  <img src="https://user-images.githubusercontent.com/25030163/219757615-d64b869d-dc19-4506-a3da-b23658009677.png" width="500"> 
-  <img src="https://user-images.githubusercontent.com/25030163/219757669-f298712e-8409-41bc-8722-5df3e829f1de.png" width="500"> 
-  <img src="https://user-images.githubusercontent.com/25030163/219757718-51dd6b3a-b5cd-40fb-b525-427762833258.png" width="300"> 
-  <img src="https://user-images.githubusercontent.com/25030163/220318196-2016ba5a-b641-414f-b11a-afff9be2edfe.png" width="300"> 
-  <img src="https://user-images.githubusercontent.com/25030163/219757781-e41b68f0-f1f8-4eac-9d13-88e2b42010e4.png" width="300"> 
-</p>
