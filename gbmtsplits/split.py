@@ -150,7 +150,7 @@ class GloballyBalancedSplit:
             tasks_per_cluster = self._compute_tasks_per_cluster(self.tasks_for_balancing, clusters)
                      
             # Merge the clusters with a linear programming method to create the subsets
-            merged_clusters_mapping = self._merge_clusters_with_balancing_mapping(
+            merged_clusters_mapping = self.merge_clusters_with_balancing_mapping(
                 tasks_per_cluster, 
                 self.sizes, 
                 self.equal_weight_perc_compounds_as_tasks, 
@@ -362,8 +362,8 @@ class GloballyBalancedSplit:
         
         return preassigned_clusters
 
-    def _merge_clusters_with_balancing_mapping(
-            self, 
+    @staticmethod
+    def merge_clusters_with_balancing_mapping(
             tasks_vs_clusters_array : np.array,
             sizes : list[float] = [0.9, 0.1, 0.1], 
             equal_weight_perc_compounds_as_tasks : bool = False,

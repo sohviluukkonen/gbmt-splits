@@ -6,6 +6,7 @@ import pandas as pd
 from pulp import *
 from typing import List, Dict
 from abc import ABC, abstractmethod
+from collections import defaultdict
 
 from typing import Literal, Callable
 
@@ -99,18 +100,29 @@ class MurckoScaffoldClustering(ClusteringMethod):
         smiles_list : list[str]
             List of SMILES strings to cluster.
         """
-            
-        # Generate scaffolds for each molecule
-        mols = [Chem.MolFromSmiles(smiles) for smiles in smiles_list]
-        scaffolds = [ MurckoScaffold.GetScaffoldForMol(mol) for mol in mols ]
 
-        # Get unique scaffolds and initialize clusters
-        unique_scaffolds = list(set(scaffolds))
-        clusters = { i: [] for i in range(len(unique_scaffolds)) }
-
-        # Cluster molecules based on scaffolds
-        for i, scaffold in enumerate(scaffolds):
-            clusters[unique_scaffolds.index(scaffold)].append(i)
+        # Initialize clusters and scaffold mapping
+        clusters = defaultdict(list)
+        scaffold2id = {} # maps a scaffold to a cluster id
+        cluster_id = 0 # id of the cluster created last
+        for i, smiles in enumerate(smiles_list):
+            try:
+                # Get molecule from SMILES and scaffold
+                mol = Chem.MolFromSmiles(smiles)
+                scaffold = MurckoScaffold.GetScaffoldForMol(mol)
+            except Exception as e:
+                if mol is None:
+                    raise RuntimeError(f'molecule #{i} cannot be parsed: {smiles}') from e
+                else:
+                    raise RuntimeError(f'cannot obtain a Murcko scaffold for molecule #{i}: {smiles}') from e
+            # Create a cluster id if not existing
+            if scaffold not in scaffold2id:
+                scaffold2id[scaffold] = cluster_id
+                clusters[cluster_id].append(i)
+                cluster_id += 1
+            # Otherwise fetch cluster if from scaffold and link to current molecule
+            else:
+                clusters[scaffold2id[scaffold]].append(i)
 
         return clusters
     
